@@ -32,7 +32,7 @@ for x in "$app"/PlugIns/*.appex; do
   check "$x/Info.plist"
   exe="$x/$($PB -c "Print :CFBundleExecutable" "$x/Info.plist")"
   echo "--- $exe 链接的库："; otool -L "$exe" | grep -E "Network|Foundation" || true
-  if strings "$exe" | grep -q "NWConnection"; then echo "OK: 扩展使用 NWConnection 传输"; else echo "ERROR: 扩展二进制里没有 NWConnection（传输层不是 Network.framework）"; fail=1; fi
+  if otool -L "$exe" | grep -q "Network" && strings "$exe" | grep -q "NWConnection"; then echo "OK: 扩展链接了 Network 并使用 NWConnection 传输"; else echo "ERROR: 扩展没有链接 Network / 没有 NWConnection（传输层不是 Network.framework）"; fail=1; fi
   if strings "$exe" | grep -q "URLSessionTaskDelegate\|uploadTask"; then echo "WARN: 扩展二进制仍引用 URLSession 上传相关符号"; fi
 done
 [ -n "$work" ] && rm -rf "$work"
