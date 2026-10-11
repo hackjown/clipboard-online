@@ -23,7 +23,7 @@ class _ClipboardAppState extends State<ClipboardApp> {
 
   ClipUser? _user;
   bool _ready = false;
-  String? _pendingShare;
+  String? _pendingShareToken;
 
   @override
   void initState() {
@@ -40,9 +40,9 @@ class _ClipboardAppState extends State<ClipboardApp> {
       _user = null;
     }
     if (mounted) setState(() => _ready = true);
-    if (_pendingShare != null && _ready) {
-      _openShare(_pendingShare!);
-      _pendingShare = null;
+    if (_pendingShareToken != null && _ready) {
+      _openShare(_pendingShareToken!);
+      _pendingShareToken = null;
     }
   }
 
@@ -55,20 +55,19 @@ class _ClipboardAppState extends State<ClipboardApp> {
           if (_ready) {
             _openShare(token);
           } else {
-            _pendingShare = token;
+            _pendingShareToken = token;
           }
         }
       });
       links.getInitialLink().then((uri) {
         if (uri == null) return;
         final token = _tokenFromUri(uri);
-        if (token != null) _pendingShare = token;
+        if (token != null) _pendingShareToken = token;
       });
     } catch (_) {}
   }
 
   String? _tokenFromUri(Uri uri) {
-    // .../s/<token> or clipboard://s/<token>
     final parts = uri.pathSegments;
     final i = parts.indexOf('s');
     if (i >= 0 && i + 1 < parts.length) return parts[i + 1];

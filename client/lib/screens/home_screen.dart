@@ -13,6 +13,7 @@ import '../services/clipboard_watch.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
+import '../services/share_inbox.dart';
 import '../widgets/item_card.dart';
 import '../widgets/quick_transfer.dart';
 import 'share_sheet.dart';
@@ -40,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late final WsSync _ws;
   late final ClipboardWatch _clip;
   late final FileTransferService _xfer;
+  late final ShareInbox _inbox;
   Timer? _poll;
 
   List<ClipItem> _items = [];
@@ -67,7 +69,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!_ws.connected) _refresh(silent: true);
     });
+    _inbox = ShareInbox();
+    _inbox.onShared = (items) => _offerQuickSend(items);
+    _inbox.start();
     _refresh();
+  }
+
+  Future<void> _offerQuickSend(List<PendingTransfer> items) async {
+    if (!mounted || items.isEmpty) return;
+    final summary = items.map((e) {
+      if (e.isText) return '文本 ${(e.textContent?.length ?? 0)} 字';
+      return e.filename;
+    }).join('、');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('发送到我的设备？'),
+        content: Text('收到系统分享：\n$summary\n\n将上传到本账号「私有」区，其他已登录设备会实时同步。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('忽略')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('发送到我的设备')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      for (final item in items) {
+        if (item.isText && (item.textContent?.trim().isNotEmpty ?? false)) {
+          await widget.api.addText(item.textContent!, visibility: 'private', expiresIn: 0);
+        } else {
+          await widget.api.uploadFile(
+            bytes: item.bytes,
+            filename: item.filename,
+            visibility: 'private',
+            expiresIn: 0,
+            contentType: item.contentType,
+          );
+        }
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(items.length > 1 ? '已发送 ${items.length} 项，其他设备将同步' : '已发送，其他设备将同步')),
+      );
+      if (_tabs.index != 1) _tabs.index = 1;
+      _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('发送失败：$e')));
+    }
   }
 
   @override
@@ -75,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _poll?.cancel();
     _ws.stop();
     _clip.stopWatch();
+    _inbox.stop();
     _tabs.dispose();
     super.dispose();
   }

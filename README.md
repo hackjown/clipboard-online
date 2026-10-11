@@ -5,7 +5,7 @@
 ```
 clipboard_online/
   server/     FastAPI 后端（纸与墨 Web UI + API + WebSocket）
-  client/     Flutter 客户端（本交付：macOS + iOS；Android 占位）
+  client/     Flutter 客户端（macOS + iOS + Android）
   .github/    Docker / Flutter CI
 ```
 
@@ -49,7 +49,8 @@ flutter run -d macos
 - **Mac**：可选「监听剪贴板」轮询，变化时确认后上传为私有
 - **iOS**：**不做**后台剪贴板监听；前台「从剪贴板导入」；Deep link `clipboard://s/<token>`
 - **快传**：Mac 拖放 / 手机选文件 → 私有上传，对端 WebSocket 同步；系统分享 + 访达显示
-- **Android**：工程目录由 `flutter create` 生成，**本版本不交付**，下一批再完善
+- **Android**：完整客户端；`flutter build apk --release` 见 client/README
+- **iOS 分享入**：Share Extension 源码在 `client/ios/Share Extension/`，签名步骤见 `client/ios/SHARE_EXTENSION.md`
 
 ## 推送到 GitHub
 

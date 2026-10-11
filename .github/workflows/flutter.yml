@@ -76,3 +76,26 @@ jobs:
           path: client/build/ios/iphoneos/ClipboardOnline-iOS-unsigned.zip
     # 正式签名 IPA 需要配置 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
     # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID 等，本流水线默认只产出未签名制品。
+
+  android-apk:
+    needs: analyze
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: client/build/app/outputs/flutter-apk/app-release.apk

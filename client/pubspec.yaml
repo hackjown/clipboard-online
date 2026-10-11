@@ -1,5 +1,5 @@
 name: clipboard_client
-description: 剪贴板 / Clipboard Online — macOS & iOS 客户端
+description: 剪贴板 / Clipboard Online — macOS / iOS / Android 客户端
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -30,6 +30,7 @@ dependencies:
   path_provider: ^2.1.5
   cross_file: ^0.3.4
   mime: ^2.0.0
+  receive_sharing_intent: ^1.9.0
 
 dev_dependencies:
   flutter_test:

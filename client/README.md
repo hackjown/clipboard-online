@@ -1,102 +1,113 @@
-# 剪贴板 · Flutter 客户端（macOS + iOS）
+# 剪贴板 · Flutter 客户端（macOS + iOS + Android）
 
-对接 Clipboard Online 服务端 API（Bearer）。Android 目录仅为占位，本版不维护。
+对接 Clipboard Online 服务端 API（Bearer）。三端共用同一套 Dart 代码：登录、公共/私有、快传、系统分享、WebSocket。
 
 ## 环境
 
-- Flutter 3.x stable、Xcode 15+（Mac）
-- 本机可先起服务端：`cd ../server && ./run.sh`（默认 `http://127.0.0.1:8099`）
+- Flutter 3.x stable  
+- macOS / iOS：Xcode 15+  
+- Android：Android Studio，JDK 17，SDK 21+
 
 ```bash
 flutter pub get
 flutter analyze
 flutter run -d macos
-flutter run -d <ios-simulator-or-device>
+flutter run -d <ios-device>
+flutter run -d <android-device>
 ```
 
-登录页可改「服务器地址」（例如局域网 `http://192.168.x.x:8099` 或公网 HTTPS）。演示账号 `demo1` / `demo123`。
+登录页可改「服务器地址」。演示账号 `demo1` / `demo123`。
 
 ## 功能对照
 
 | 功能 | 说明 |
 | --- | --- |
-| 登录/注册 | 存 Bearer 于 Keychain（secure storage） |
+| 登录/注册 | Bearer 存于 Keychain / Keystore |
 | 公共 / 我的私有 | Tab + 下拉刷新 + 搜索 |
 | 添加文本 | 可见性 + 过期；公开前敏感检测 |
 | 上传 | 文件选择 / 相册图片 |
-| 剪贴板 | **Mac** 可选监听；**iOS** 仅手动「从剪贴板导入」 |
-| 快传 | 拖放/选文件 → 私有上传；对端 WS 同步；系统「分享」+ Mac「在访达中显示」 |
-| 分享 | 生成链接 + 二维码；可撤销 |
-| 收藏 / 置顶 | 调对应 API |
+| 剪贴板 | **Mac** 可选监听；**iOS/Android** 手动「从剪贴板导入」 |
+| 快传 | 拖放(Mac)/选文件 → **私有**上传；对端 WS 同步 |
+| 系统分享出 | `share_plus` → 微信等（iOS/Android） |
+| 系统分享入 | Android Intent + **iOS Share Extension**（见下） |
 | 实时 | WebSocket，失败则 5s 轮询 |
-| Deep link | `clipboard://s/<token>` → 分享预览页 |
-
+| Deep link | `clipboard://s/<token>` |
 
 ## 快传（双向）
 
-同一账号下，Mac ↔ 手机通过 **私有区 + WebSocket** 互传文件：
+同一账号下，Mac ↔ 手机通过 **私有区 + WebSocket** 互传：
 
-1. **Mac → 手机**  
-   - 主页顶部「快传」区：把文件 **拖进虚线框**，或点「选文件 / 选图片 / 粘贴」  
-   - 点 **「发送到我的设备」** → 上传为 **私有**（不过期）  
-   - Toast：`已发送，其他设备将同步`  
-   - 手机端列表经 WebSocket（或轮询）刷新；点条目 **「分享」** 可走系统分享面板（微信等）
+1. **Mac → 手机**：拖放或选文件 →「发送到我的设备」→ 私有上传 → Toast「已发送，其他设备将同步」→ 手机点「分享」可转微信  
+2. **手机 → Mac**：快传选文件 / 或从微信等 **系统分享到「剪贴板」** → 确认上传私有 → Mac 实时出现，可「在访达中显示」
 
-2. **手机 → Mac**  
-   - 同样在「快传」里选文件 / 选图片 / 从剪贴板导入，再点发送  
-   - （完整「从微信分享到 App」需 iOS Share Extension，本版未内置；请先用选文件或粘贴）  
-   - Mac 端实时出现后：可 **打开**、**在访达中显示**（下载到临时目录后 `open -R`）、或再 **分享**
+快传路径 **始终私有**。
 
-快传路径 **始终私有**，与公共区无关。现有登录、列表、收藏/置顶、链接二维码分享不受影响。
+### 从微信分享到本 App（iOS）
+
+微信走 **系统分享面板**，不需要非官方微信 SDK：
+
+1. 在微信中点「…」→「分享」  
+2. 面板中选择 **「剪贴板」**（Share Extension）  
+3. 主 App 打开后确认「发送到我的设备」→ 私有上传  
+
+首次需在 Xcode 完成 Share Extension 签名，详见 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md)。
+
+Android：其它 App「分享到」列表会出现「剪贴板」（已配置 `SEND` / `SEND_MULTIPLE` Intent）。
+
+## Android 构建 APK
+
+```bash
+cd client
+flutter pub get
+flutter build apk --release
+# 产物：build/app/outputs/flutter-apk/app-release.apk
+
+# 可选分架构更小包：
+flutter build apk --release --split-per-abi
+```
+
+安装：`adb install -r build/app/outputs/flutter-apk/app-release.apk`  
+局域网调试请把服务器地址设为电脑的 `http://192.168.x.x:8099`（Android 已允许 cleartext）。
+
+App Bundle（上架）：
+
+```bash
+flutter build appbundle --release
+```
 
 ## macOS 构建
 
 ```bash
 flutter config --enable-macos-desktop
 flutter build macos --release
-# 产物：build/macos/Build/Products/Release/clipboard_client.app
+# build/macos/Build/Products/Release/clipboard_client.app
 ```
 
-首次访问剪贴板监听时，若系统拦截，请到 **系统设置 → 隐私与安全性** 中允许本 App（辅助功能 / 自动化等，视 macOS 版本而定）。
+## iOS 构建与 Share Extension 签名
 
-## iOS 构建与侧载
-
-### 未签名（CI 同款）
+### 未签名（CI）
 
 ```bash
 flutter build ios --release --no-codesign
-# build/ios/iphoneos/Runner.app
 ```
 
-### 正式 IPA（需 Apple 开发者账号）
+### 正式签名 + Share Extension
 
-1. 用 Xcode 打开 `ios/Runner.xcworkspace`
-2. Signing & Capabilities 选择你的 Team，改 Bundle ID
-3. 构建：
+1. 按 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md) 添加 Share Extension Target、App Group、Team  
+2. App Group 固定为：`group.com.clipboard.online.clipboardClient`  
+3. 用户自定义 `CUSTOM_GROUP_ID`（Build Setting）与 Entitlements 保持一致  
+4. 构建：
 
 ```bash
 flutter build ipa --release
-# build/ios/ipa/*.ipa
 ```
 
-### 侧载说明（简述）
+侧载可用 AltStore / 开发者证书；未签名包不能直接当商店替代方案。
 
-- **AltStore / SideStore**：自签 7 天（免费 Apple ID）或配合开发者证书；需电脑刷新或配对。
-- **TrollStore**（特定系统版本）：持久安装，仅限支持设备，风险自担。
-- 企业签 / ad-hoc：需合法证书与设备 UDID 列表。
+可选 CI Secrets（已签名 IPA）：`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_PROVISIONING_PROFILE`、`APPLE_TEAM_ID`。
 
-**请勿**把未签名包直接当作 App Store 替代方案宣传。iOS **无法**在后台持续读取剪贴板。
+## 依赖说明
 
-## 签名相关 CI Secrets（可选）
-
-若要在 GitHub Actions 产出**已签名** IPA，需自行扩展 workflow 并配置例如：
-
-- `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_PROVISIONING_PROFILE`
-- `APPLE_TEAM_ID`
-
-当前 `flutter.yml` 只上传 **macOS zip** 与 **iOS 未签名 zip** 制品。
-
-## Android
-
-`android/` 由模板生成，**本版本不交付功能与文档**；见仓库根 README。
+- `receive_sharing_intent`：Android 分享入 + iOS Share Extension 桥接（SPM）  
+- `share_plus`：分享出  
+- `desktop_drop`：仅桌面拖放  
