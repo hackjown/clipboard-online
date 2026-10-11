@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ECE6D9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#100F0D" media="(prefers-color-scheme: dark)">
+<title>Clipboard Online</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip" href="#list">跳到内容</a>
+
+<header class="topbar">
+  <a class="brand" href="/" data-act="home" aria-label="Clipboard Online 主页">
+    <span class="brand-mark" id="brandMark"></span>
+    <span class="brand-name">Clipboard<b>Online</b></span>
+  </a>
+  <nav class="topnav" aria-label="主导航">
+    <a href="/" class="navbtn" data-act="home" id="navHome">主页</a>
+    <button type="button" class="navbtn" data-act="add-text">添加文本</button>
+    <button type="button" class="navbtn" data-act="add-file">上传文件</button>
+    <button type="button" class="navbtn navbtn--danger" data-act="clear-menu">清空<span class="caret"></span></button>
+  </nav>
+  <div class="top-right">
+    <span class="sync" id="sync" role="status" aria-live="polite"><i></i><span>同步中</span></span>
+    <button type="button" class="iconbtn" id="themeBtn" data-act="theme" aria-label="切换主题"></button>
+    <div class="authbox" id="authbox">
+      <button type="button" class="btn btn--ghost auth-guest" data-act="login">登录</button>
+      <button type="button" class="btn btn--accent auth-guest" data-act="register">注册</button>
+      <span class="who auth-user" hidden><span class="avatar" id="avatar"></span><b id="whoName"></b></span>
+      <button type="button" class="iconbtn auth-user" id="logoutBtn" data-act="logout" aria-label="退出登录" hidden></button>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="side" aria-label="概览">
+    <h1 class="hero">随手一贴，<br>随处<mark>可取</mark>。</h1>
+    <p class="hero-sub">每人一块私有剪贴板，也可把内容发到公共区，方便跨设备、跨账号取用。</p>
+    <dl class="stats" id="statsSide">
+      <div><dt>可见</dt><dd data-s="total">0</dd></div>
+      <div><dt>公共</dt><dd data-s="public">0</dd></div>
+      <div><dt>我的私有</dt><dd data-s="private">0</dd></div>
+      <div><dt>占用</dt><dd data-s="bytes">0 B</dd></div>
+    </dl>
+    <div class="side-actions">
+      <button type="button" class="btn btn--accent" data-act="add-text"><span class="ico" data-i="plus"></span>添加文本</button>
+      <button type="button" class="btn" data-act="add-file"><span class="ico" data-i="upload"></span>上传文件</button>
+    </div>
+    <ul class="keys" aria-label="快捷键">
+      <li><kbd>N</kbd>添加文本</li>
+      <li><kbd>U</kbd>上传文件</li>
+      <li><kbd>/</kbd>搜索</li>
+      <li><kbd>Ctrl</kbd><kbd>V</kbd>粘贴即添加</li>
+      <li><kbd>T</kbd>切换主题</li>
+    </ul>
+    <p class="warn" id="warnGuest"><span class="ico" data-i="alert"></span><span>访客可浏览与下载公共内容。要添加或查看私有剪贴板，请先注册 / 登录。</span></p>
+  </aside>
+
+  <main class="feed">
+    <div class="toolbar">
+      <label class="search">
+        <span class="ico" data-i="search"></span>
+        <input type="search" id="q" placeholder="搜索文本、文件名或用户名" autocomplete="off" enterkeyhint="search" aria-label="搜索">
+        <button type="button" class="clear-q" id="clearQ" aria-label="清除搜索" hidden></button>
+      </label>
+      <div class="scope" role="tablist" aria-label="分区" id="scope">
+        <button type="button" role="tab" data-scope="public" aria-selected="true">公共<em data-c="public"></em></button>
+        <button type="button" role="tab" data-scope="private" aria-selected="false">我的私有<em data-c="private"></em></button>
+        <button type="button" role="tab" data-scope="all" aria-selected="false">全部<em data-c="total"></em></button>
+      </div>
+      <div class="seg" role="tablist" aria-label="类型筛选" id="seg">
+        <button type="button" role="tab" data-filter="all" aria-selected="true">全部<em data-c="total"></em></button>
+        <button type="button" role="tab" data-filter="text" aria-selected="false">文本<em data-c="text"></em></button>
+        <button type="button" role="tab" data-filter="file" aria-selected="false">文件<em data-c="file"></em></button>
+      </div>
+    </div>
+    <p class="statline" id="statline"></p>
+
+    <ol class="list" id="list" aria-live="polite">
+      <li class="skel"><div class="sk sk-a"></div><div class="sk sk-b"></div><div class="sk sk-c"></div></li>
+      <li class="skel"><div class="sk sk-a"></div><div class="sk sk-b"></div></li>
+      <li class="skel"><div class="sk sk-a"></div><div class="sk sk-b"></div><div class="sk sk-c"></div></li>
+    </ol>
+    <div class="empty" id="empty" hidden></div>
+  </main>
+</div>
+
+<nav class="tabbar" aria-label="底部导航">
+  <button type="button" data-scope-tab="public" class="on"><span class="ico" data-i="globe"></span><span>公共</span></button>
+  <button type="button" data-scope-tab="private"><span class="ico" data-i="lock"></span><span>私有</span></button>
+  <button type="button" data-act="add-text"><span class="ico" data-i="plus"></span><span>添加</span></button>
+  <button type="button" data-act="auth-or-clear"><span class="ico" data-i="user"></span><span id="tabAuthLabel">登录</span></button>
+</nav>
+<button type="button" class="fab" data-act="add-text" aria-label="添加"><span class="ico" data-i="plus"></span></button>
+
+<button type="button" class="upill" id="upill" hidden><svg class="ring ring--sm" viewBox="0 0 44 44"><circle class="ring-bg" cx="22" cy="22" r="18"/><circle class="ring-fg" cx="22" cy="22" r="18"/></svg><span id="upillText">上传中</span></button>
+
+<div class="sheet-root" id="sheet" hidden>
+  <div class="scrim" data-act="close-sheet"></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
+    <div class="grab" id="grab"><i></i></div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="dropveil" id="dropveil" hidden><div><span class="ico" data-i="upload"></span><b>松开即可上传</b><small>文件将添加到剪贴板</small></div></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

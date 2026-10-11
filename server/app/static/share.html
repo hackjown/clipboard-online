@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>分享 · Clipboard Online</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="share-body">
+<main class="share-card" id="root">
+  <div class="brand brand--big"><span class="brand-mark" id="brandMark"></span><span class="brand-name">Clipboard<b>Share</b></span></div>
+  <p class="hero-sub" id="status">加载中…</p>
+</main>
+<script>
+(function(){
+  var mark=document.getElementById('brandMark');
+  mark.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7v9a4 4 0 0 0 8 0V6a2.5 2.5 0 0 0-5 0v9.5a1 1 0 0 0 2 0V8"/></svg>';
+  var token=location.pathname.split('/').filter(Boolean).pop();
+  var root=document.getElementById('root');
+  fetch('/api/share/'+encodeURIComponent(token)).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+  .then(function(r){
+    if(!r.ok){ document.getElementById('status').textContent=r.d.error||'分享无效'; return; }
+    var d=r.d;
+    var html='<div class="brand brand--big"><span class="brand-mark">'+mark.innerHTML+'</span><span class="brand-name">Clipboard<b>Share</b></span></div>';
+    html+='<p class="chip chip--pub" style="display:inline-flex;margin:12px 0 8px">分享预览</p>';
+    if(d.owner_username) html+='<p class="meta">来自 @'+esc(d.owner_username)+'</p>';
+    if(d.type==='text'){
+      html+='<pre class="share-text">'+esc(d.content)+'</pre>';
+      html+='<button class="btn btn--ink btn--block" id="copy">复制文本</button>';
+    } else {
+      if(d.is_image) html+='<img class="share-img" src="/s/'+encodeURIComponent(token)+'/file" alt="">';
+      html+='<p class="fname">'+esc(d.filename)+'</p><p class="fsub">'+(d.ext||'').toUpperCase()+' · '+fmt(d.size)+'</p>';
+      html+='<a class="btn btn--accent btn--block" href="/s/'+encodeURIComponent(token)+'/file" download>下载文件</a>';
+    }
+    html+='<p style="margin-top:16px"><a href="/">返回剪贴板</a></p>';
+    root.innerHTML=html;
+    var b=document.getElementById('copy');
+    if(b) b.onclick=function(){ navigator.clipboard.writeText(d.content).then(function(){b.textContent='已复制';}); };
+  }).catch(function(){ document.getElementById('status').textContent='加载失败'; });
+  function esc(s){ return String(s||'').replace(/[&<>"']/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);}); }
+  function fmt(n){ if(!n)return '0 B'; var u=['B','KB','MB','GB'],i=0,v=n; while(v>=1024&&i<u.length-1){v/=1024;i++;} return (v>=100||i===0?Math.round(v):v.toFixed(1))+' '+u[i]; }
+})();
+</script>
+</body>
+</html>

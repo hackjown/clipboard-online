@@ -1,0 +1,78 @@
+name: Flutter client
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'client/**'
+      - '.github/workflows/flutter.yml'
+  pull_request:
+    paths:
+      - 'client/**'
+      - '.github/workflows/flutter.yml'
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+
+  macos:
+    needs: analyze
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter config --enable-macos-desktop
+      - run: flutter build macos --release
+      - name: Pack macOS app
+        run: |
+          cd build/macos/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent clipboard_client.app ClipboardOnline-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: client/build/macos/Build/Products/Release/ClipboardOnline-macOS.zip
+
+  ios-unsigned:
+    needs: analyze
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+      - name: Pack unsigned Runner.app
+        run: |
+          cd build/ios/iphoneos
+          ditto -c -k --sequesterRsrc --keepParent Runner.app ClipboardOnline-iOS-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned
+          path: client/build/ios/iphoneos/ClipboardOnline-iOS-unsigned.zip
+    # 正式签名 IPA 需要配置 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+    # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID 等，本流水线默认只产出未签名制品。

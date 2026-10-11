@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Clipboard Online · 登录</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+<main class="login">
+  <div class="brand brand--big"><span class="brand-mark" id="brandMark"></span><span class="brand-name">Clipboard<b>Online</b></span></div>
+  <h1 class="hero hero--sm">请输入<br>访问<mark>密码</mark></h1>
+  <form id="f" class="login-form" autocomplete="on">
+    <label class="field">
+      <span>密码</span>
+      <input type="password" id="pw" name="password" autocomplete="current-password" required autofocus>
+    </label>
+    <p class="err" id="err" role="alert" hidden></p>
+    <button class="btn btn--accent btn--block" type="submit" id="go">进入</button>
+  </form>
+</main>
+<script src="/static/login.js"></script>
+</body>
+</html>
