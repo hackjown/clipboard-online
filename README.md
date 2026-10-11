@@ -72,7 +72,7 @@ flutter run -d macos
   - **TrollStore**（仅特定 iOS 版本）：可直接安装未签名 IPA；
   - 或用自己的开发者证书在 Xcode / `fastlane` / `zsign` 中重签。
 - Bundle ID：`com.clipboard.online.clipboardClient`，侧载工具可能会改写它；App Group 为 `group.com.clipboard.online.clipboardClient`。
-- **Share Extension 暂未嵌入此 IPA**（Xcode 工程中尚无该 Target），因此 IPA 里没有「分享到剪贴板」入口；需按 [`client/ios/SHARE_EXTENSION.md`](client/ios/SHARE_EXTENSION.md) 在 Xcode 中添加 Target 后自行构建。
+- IPA **已嵌入 Share Extension**（`Payload/Runner.app/PlugIns/ShareExtension.appex`，Bundle ID `com.clipboard.online.clipboardClient.ShareExtension`，CI 会校验）。重签后微信/相册/文件的分享面板里才会出现「剪贴板」；签名与 App Group 说明见 [`client/ios/SHARE_EXTENSION.md`](client/ios/SHARE_EXTENSION.md)。
 - 免费 Apple ID 无法使用 App Groups；重签时若报 entitlement 错误，可去掉 App Group（主 App 的快传不依赖它，仅 Share Extension 需要）。
 
 服务端 Docker 镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`（`v*` 标签同时推 `latest` 与版本号）。

@@ -50,7 +50,7 @@ flutter run -d <android-device>
 2. 面板中选择 **「剪贴板」**（Share Extension）  
 3. 主 App 打开后确认「发送到我的设备」→ 私有上传  
 
-首次需在 Xcode 完成 Share Extension 签名，详见 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md)。
+Share Extension 目标已嵌入工程（IPA 内含 `.appex`）；真机使用需签名并启用 App Group，详见 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md)。
 
 Android：其它 App「分享到」列表会出现「剪贴板」（已配置 `SEND` / `SEND_MULTIPLE` Intent）。
 
@@ -97,7 +97,7 @@ mkdir Payload && cp -R build/ios/iphoneos/Runner.app Payload/ && zip -qry clipbo
 
 ### 正式签名 + Share Extension
 
-1. 按 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md) 添加 Share Extension Target、App Group、Team  
+1. 按 [`ios/SHARE_EXTENSION.md`](ios/SHARE_EXTENSION.md) 给 Runner 与 Share Extension 设置同一 Team，并启用 App Group  
 2. App Group 固定为：`group.com.clipboard.online.clipboardClient`  
 3. 用户自定义 `CUSTOM_GROUP_ID`（Build Setting）与 Entitlements 保持一致  
 4. 构建：
