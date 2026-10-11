@@ -48,6 +48,7 @@ flutter run -d macos
 - 功能：公共/私有列表、添加文本、上传文件/相册图、分享二维码、过期与敏感提醒、收藏/置顶、WebSocket 同步
 - **Mac**：可选「监听剪贴板」轮询，变化时确认后上传为私有
 - **iOS**：**不做**后台剪贴板监听；前台「从剪贴板导入」；Deep link `clipboard://s/<token>`
+- **快传**：Mac 拖放 / 手机选文件 → 私有上传，对端 WebSocket 同步；系统分享 + 访达显示
 - **Android**：工程目录由 `flutter create` 生成，**本版本不交付**，下一批再完善
 
 ## 推送到 GitHub

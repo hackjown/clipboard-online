@@ -9,18 +9,25 @@ class ItemCard extends StatelessWidget {
     required this.item,
     required this.onCopy,
     required this.onDelete,
-    required this.onShare,
+    required this.onShareLink,
+    required this.onSystemShare,
     required this.onFavorite,
     required this.onPin,
+    this.onReveal,
     this.imageUrl,
   });
 
   final ClipItem item;
   final VoidCallback onCopy;
   final VoidCallback? onDelete;
-  final VoidCallback? onShare;
+  /// 生成分享链接与二维码
+  final VoidCallback? onShareLink;
+  /// 系统分享面板（微信等）
+  final VoidCallback? onSystemShare;
   final VoidCallback? onFavorite;
   final VoidCallback? onPin;
+  /// macOS：在访达中显示
+  final VoidCallback? onReveal;
   final String? imageUrl;
 
   String _time(double ts) {
@@ -70,8 +77,13 @@ class ItemCard extends StatelessWidget {
             if (item.isImage && imageUrl != null)
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: Image.network(imageUrl!, height: 160, width: double.infinity, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                child: Image.network(
+                  imageUrl!,
+                  height: 160,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
               ),
             if (item.isText)
               SelectableText(
@@ -90,26 +102,57 @@ class ItemCard extends StatelessWidget {
               Wrap(
                 spacing: 6,
                 children: item.tags
-                    .map((t) => Chip(label: Text(t), visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap))
+                    .map((t) => Chip(
+                          label: Text(t),
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ))
                     .toList(),
               ),
             ],
             const SizedBox(height: 10),
             Wrap(
-              spacing: 8,
+              spacing: 4,
+              runSpacing: 4,
               children: [
                 if (item.isText)
-                  FilledButton.tonalIcon(onPressed: onCopy, icon: const Icon(Icons.copy, size: 18), label: const Text('复制')),
+                  FilledButton.tonalIcon(
+                    onPressed: onCopy,
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text('复制'),
+                  ),
                 if (item.isFile)
-                  FilledButton.tonalIcon(onPressed: onCopy, icon: const Icon(Icons.download, size: 18), label: const Text('打开')),
-                if (onShare != null)
-                  IconButton(tooltip: '分享', onPressed: onShare, icon: const Icon(Icons.ios_share)),
+                  FilledButton.tonalIcon(
+                    onPressed: onCopy,
+                    icon: const Icon(Icons.download, size: 18),
+                    label: const Text('打开'),
+                  ),
+                if (onSystemShare != null)
+                  FilledButton.tonalIcon(
+                    onPressed: onSystemShare,
+                    icon: const Icon(Icons.ios_share, size: 18),
+                    label: const Text('分享'),
+                  ),
+                if (onReveal != null)
+                  TextButton.icon(
+                    onPressed: onReveal,
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: const Text('在访达中显示'),
+                  ),
+                if (onShareLink != null)
+                  IconButton(
+                    tooltip: '链接 / 二维码',
+                    onPressed: onShareLink,
+                    icon: const Icon(Icons.qr_code_2),
+                  ),
                 if (onFavorite != null)
                   IconButton(
                     tooltip: '收藏',
                     onPressed: onFavorite,
-                    icon: Icon(item.favorite ? Icons.star : Icons.star_border,
-                        color: item.favorite ? Colors.amber : null),
+                    icon: Icon(
+                      item.favorite ? Icons.star : Icons.star_border,
+                      color: item.favorite ? Colors.amber : null,
+                    ),
                   ),
                 if (onPin != null && item.mine)
                   IconButton(
@@ -118,7 +161,11 @@ class ItemCard extends StatelessWidget {
                     icon: Icon(item.pinned ? Icons.push_pin : Icons.push_pin_outlined),
                   ),
                 if (onDelete != null)
-                  IconButton(tooltip: '删除', onPressed: onDelete, icon: Icon(Icons.delete_outline, color: cs.error)),
+                  IconButton(
+                    tooltip: '删除',
+                    onPressed: onDelete,
+                    icon: Icon(Icons.delete_outline, color: cs.error),
+                  ),
               ],
             ),
           ],

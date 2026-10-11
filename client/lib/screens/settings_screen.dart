@@ -60,10 +60,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('平台说明'),
             subtitle: Text(
               isMac
-                  ? 'Mac 可在主页开启「监听剪贴板」：每 2 秒轮询系统剪贴板，变化时询问是否上传为私有。需授予辅助功能/粘贴板相关权限。'
+                  ? 'Mac：主页「快传」支持拖放文件；可开启「监听剪贴板」。文件可用「在访达中显示」。需授予粘贴板相关权限。'
                   : isIOS
-                      ? 'iOS 不支持后台剪贴板监听。请在打开 App 后使用「从剪贴板导入」，或通过分享面板（未来版本）发送。'
-                      : 'Android 客户端规划中。',
+                      ? 'iOS：用「快传」选文件/图片或从剪贴板导入后「发送到我的设备」。条目「分享」走系统分享面板（微信等）。不支持后台剪贴板监听。'
+                      : 'Android 客户端规划中；分享 API 已预留。',
             ),
           ),
           const ListTile(

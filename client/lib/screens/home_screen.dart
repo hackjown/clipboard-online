@@ -12,7 +12,9 @@ import '../services/api.dart';
 import '../services/clipboard_watch.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
+import '../services/file_transfer.dart';
 import '../widgets/item_card.dart';
+import '../widgets/quick_transfer.dart';
 import 'share_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late final TabController _tabs;
   late final WsSync _ws;
   late final ClipboardWatch _clip;
+  late final FileTransferService _xfer;
   Timer? _poll;
 
   List<ClipItem> _items = [];
@@ -58,6 +61,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _ws = WsSync(widget.api)..onEvent = () => _refresh(silent: true);
     _ws.start();
     _clip = ClipboardWatch();
+    _xfer = FileTransferService(widget.api);
     _clip.onText = (t) { _confirmClipboardText(t); };
     _clip.onImage = (b, n) { _confirmClipboardImage(b, n); };
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -283,6 +287,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  Future<void> _systemShare(ClipItem it) async {
+    try {
+      if (it.isText) {
+        await _xfer.shareText(it.content ?? '');
+        return;
+      }
+      if (it.filename == null) return;
+      final url = widget.api.downloadUrl(it.filename!);
+      final file = await _xfer.downloadToCache(filename: it.filename!, remoteUrl: url);
+      await _xfer.shareFile(file);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('分享失败：$e')));
+    }
+  }
+
+  Future<void> _reveal(ClipItem it) async {
+    try {
+      if (it.filename == null) return;
+      final url = widget.api.downloadUrl(it.filename!);
+      final file = await _xfer.downloadToCache(filename: it.filename!, remoteUrl: url);
+      await _xfer.revealOrOpen(file);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('打开失败：$e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMac = !kIsWeb && Platform.isMacOS;
@@ -339,6 +371,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       body: Column(
         children: [
+          QuickTransferPanel(
+            api: widget.api,
+            onSent: () {
+              if (_tabs.index != 1) _tabs.index = 1;
+              _refresh();
+            },
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
             child: TextField(
@@ -410,8 +449,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   }
                                 }
                               : null,
-                          onShare: it.mine
+                          onShareLink: it.mine
                               ? () => showShareSheet(context, api: widget.api, item: it)
+                              : null,
+                          onSystemShare: () => _systemShare(it),
+                          onReveal: (!kIsWeb && Platform.isMacOS && it.isFile && it.filename != null)
+                              ? () => _reveal(it)
                               : null,
                           onFavorite: () async {
                             await widget.api.toggleFavorite(it.uuid);
