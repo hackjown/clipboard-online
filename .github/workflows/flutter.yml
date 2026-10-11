@@ -3,6 +3,7 @@ name: Flutter client
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
     paths:
       - 'client/**'
       - '.github/workflows/flutter.yml'
@@ -45,11 +46,11 @@ jobs:
       - name: Pack macOS app
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --sequesterRsrc --keepParent clipboard_client.app ClipboardOnline-macOS.zip
+          ditto -c -k --sequesterRsrc --keepParent clipboard_client.app "$GITHUB_WORKSPACE/clipboard-macos.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: client/build/macos/Build/Products/Release/ClipboardOnline-macOS.zip
+          path: clipboard-macos.zip
 
   ios-unsigned:
     needs: analyze
@@ -69,13 +70,13 @@ jobs:
       - name: Pack unsigned Runner.app
         run: |
           cd build/ios/iphoneos
-          ditto -c -k --sequesterRsrc --keepParent Runner.app ClipboardOnline-iOS-unsigned.zip
+          ditto -c -k --sequesterRsrc --keepParent Runner.app "$GITHUB_WORKSPACE/clipboard-ios-unsigned.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned
-          path: client/build/ios/iphoneos/ClipboardOnline-iOS-unsigned.zip
-    # 正式签名 IPA 需要配置 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
-    # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID 等，本流水线默认只产出未签名制品。
+          path: clipboard-ios-unsigned.zip
+    # 正式签名 IPA 需要 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+    # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID。本流水线只产出未签名制品。
 
   android-apk:
     needs: analyze
@@ -95,7 +96,36 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter build apk --release
+      - name: Rename APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/clipboard-android.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: client/build/app/outputs/flutter-apk/app-release.apk
+          path: clipboard-android.apk
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, ios-unsigned, android-apk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## 下载说明
+            - **clipboard-android.apk** — Android 安装包（debug 签名，可直接侧载）
+            - **clipboard-macos.zip** — macOS `.app`，**未签名/未公证**：右键「打开」，或 `xattr -cr clipboard_client.app`
+            - **clipboard-ios-unsigned.zip** — iOS **未签名** Runner.app，**不能直接安装**，需用 Xcode / AltStore / 自有证书重新签名
+            - 服务端镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`
+          files: |
+            dist/clipboard-macos.zip
+            dist/clipboard-ios-unsigned.zip
+            dist/clipboard-android.apk

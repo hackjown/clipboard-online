@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.clipboard.online.clipboard_client"
-    compileSdk = flutter.compileSdkVersion
+    // receive_sharing_intent 1.9 requires compileSdk 37
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
