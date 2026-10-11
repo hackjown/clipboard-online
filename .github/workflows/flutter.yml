@@ -106,18 +106,23 @@ jobs:
           rm -rf ts && mkdir -p ts/Payload
           cp -R build/ios/iphoneos/Runner.app ts/Payload/
           APP=ts/Payload/Runner.app
-          # 先签嵌入的 framework / 扩展，最后签主 App
+          exe_of() { /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$1/Info.plist"; }
+          # 先签嵌入的 framework / 扩展，最后签主 App（直接对可执行文件签名）
           if [ -d "$APP/Frameworks" ]; then
-            for f in "$APP"/Frameworks/*.framework; do ldid -S "$f"; done
+            for f in "$APP"/Frameworks/*.framework; do
+              ldid -S "$f/$(exe_of "$f")"
+            done
           fi
-          for x in "$APP"/PlugIns/*.appex; do ldid -S"$ENT_DIR/ext.ent" "$x"; done
-          ldid -S"$ENT_DIR/runner.ent" "$APP"
-          echo "=== entitlements: Runner.app ==="
-          ldid -e "$APP" | tee "$RUNNER_TEMP/runner-ent.txt"
+          for x in "$APP"/PlugIns/*.appex; do
+            ldid -S"$ENT_DIR/ext.ent" "$x/$(exe_of "$x")"
+          done
+          ldid -S"$ENT_DIR/runner.ent" "$APP/$(exe_of "$APP")"
+          echo "=== entitlements: Runner.app ($(exe_of "$APP")) ==="
+          ldid -e "$APP/$(exe_of "$APP")" | tee "$RUNNER_TEMP/runner-ent.txt"
           grep -q "$GROUP" "$RUNNER_TEMP/runner-ent.txt" || { echo "ERROR: Runner.app missing app group entitlement"; exit 1; }
           for x in "$APP"/PlugIns/*.appex; do
-            echo "=== entitlements: $x ==="
-            ldid -e "$x" | tee "$RUNNER_TEMP/ext-ent.txt"
+            echo "=== entitlements: $x ($(exe_of "$x")) ==="
+            ldid -e "$x/$(exe_of "$x")" | tee "$RUNNER_TEMP/ext-ent.txt"
             grep -q "$GROUP" "$RUNNER_TEMP/ext-ent.txt" || { echo "ERROR: $x missing app group entitlement"; exit 1; }
           done
           (cd ts && zip -qry "$GITHUB_WORKSPACE/clipboard-ios-trollstore.ipa" Payload)
