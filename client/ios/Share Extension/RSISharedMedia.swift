@@ -4,6 +4,11 @@
 import Foundation
 import UniformTypeIdentifiers
 
+public let kSchemePrefix = "ShareMedia"
+public let kUserDefaultsKey = "ShareKey"
+public let kUserDefaultsMessageKey = "ShareMessageKey"
+public let kAppGroupIdKey = "AppGroupId"
+
 public class SharedMediaFile: Codable {
     var path: String
     var mimeType: String?
