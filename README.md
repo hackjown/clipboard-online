@@ -61,9 +61,19 @@ flutter run -d macos
 | --- | --- |
 | `clipboard-android.apk` | Android 安装包（debug 签名，可直接侧载） |
 | `clipboard-macos.zip` | macOS `.app`，**未签名、未公证**：右键 →「打开」，或 `xattr -cr clipboard_client.app` |
-| `clipboard-ios-unsigned.zip` | iOS **未签名** `Runner.app`，**不能直接安装**；需用 Xcode / AltStore / 自有证书重新签名 |
+| `clipboard-ios-unsigned.ipa` | iOS **未签名** IPA，**不能直接安装**；用 AltStore / Sideloadly / TrollStore 或自有证书重签（见下） |
 
 > **macOS 说明**：CI 产出的 macOS 应用未签名，没有 Keychain 权限（-34018），因此登录令牌回退保存到本地应用偏好设置（SharedPreferences）；iOS/Android 仍使用 Keychain/Keystore。
+
+### iOS IPA 说明
+
+- 该 IPA 由 `flutter build ios --no-codesign` 打包（`Payload/Runner.app`），**未签名**，须重签后才能安装：
+  - **AltStore / SideStore / Sideloadly**：用你的 Apple ID 自动重签（免费账号 7 天过期）；
+  - **TrollStore**（仅特定 iOS 版本）：可直接安装未签名 IPA；
+  - 或用自己的开发者证书在 Xcode / `fastlane` / `zsign` 中重签。
+- Bundle ID：`com.clipboard.online.clipboardClient`，侧载工具可能会改写它；App Group 为 `group.com.clipboard.online.clipboardClient`。
+- **Share Extension 暂未嵌入此 IPA**（Xcode 工程中尚无该 Target），因此 IPA 里没有「分享到剪贴板」入口；需按 [`client/ios/SHARE_EXTENSION.md`](client/ios/SHARE_EXTENSION.md) 在 Xcode 中添加 Target 后自行构建。
+- 免费 Apple ID 无法使用 App Groups；重签时若报 entitlement 错误，可去掉 App Group（主 App 的快传不依赖它，仅 Share Extension 需要）。
 
 服务端 Docker 镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`（`v*` 标签同时推 `latest` 与版本号）。
 私有仓库的镜像默认私有，拉取前先 `docker login ghcr.io`（用有 `read:packages` 的 PAT）。

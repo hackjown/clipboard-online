@@ -91,6 +91,8 @@ flutter build macos --release
 
 ```bash
 flutter build ios --release --no-codesign
+# 打包 IPA：
+mkdir Payload && cp -R build/ios/iphoneos/Runner.app Payload/ && zip -qry clipboard-ios-unsigned.ipa Payload
 ```
 
 ### 正式签名 + Share Extension

@@ -67,14 +67,19 @@ jobs:
       - run: flutter pub get
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
-      - name: Pack unsigned Runner.app
+      - name: Package unsigned IPA
         run: |
-          cd build/ios/iphoneos
-          ditto -c -k --sequesterRsrc --keepParent Runner.app "$GITHUB_WORKSPACE/clipboard-ios-unsigned.zip"
+          rm -rf Payload
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa" Payload
+          ls -la "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa"
+          # 列出内含的 appex（Share Extension 目标尚未嵌入 Xcode 工程时为空）
+          ls Payload/Runner.app/PlugIns 2>/dev/null || echo "no app extensions embedded"
       - uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned
-          path: clipboard-ios-unsigned.zip
+          path: clipboard-ios-unsigned.ipa
     # 正式签名 IPA 需要 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
     # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID。本流水线只产出未签名制品。
 
@@ -123,9 +128,9 @@ jobs:
             ## 下载说明
             - **clipboard-android.apk** — Android 安装包（debug 签名，可直接侧载）
             - **clipboard-macos.zip** — macOS `.app`，**未签名/未公证**：右键「打开」，或 `xattr -cr clipboard_client.app`
-            - **clipboard-ios-unsigned.zip** — iOS **未签名** Runner.app，**不能直接安装**，需用 Xcode / AltStore / 自有证书重新签名
+            - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；用 AltStore / Sideloadly / TrollStore 或自有证书重签。当前 IPA 仅含主 App（Share Extension 需按 client/ios/SHARE_EXTENSION.md 在 Xcode 中配置）
             - 服务端镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`
           files: |
             dist/clipboard-macos.zip
-            dist/clipboard-ios-unsigned.zip
+            dist/clipboard-ios-unsigned.ipa
             dist/clipboard-android.apk
