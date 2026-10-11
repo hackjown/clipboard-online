@@ -8,6 +8,7 @@ import 'screens/settings_screen.dart';
 import 'screens/share_view_screen.dart';
 import 'services/api.dart';
 import 'services/auth_store.dart';
+import 'theme/ink_theme.dart';
 
 class ClipboardApp extends StatefulWidget {
   const ClipboardApp({super.key});
@@ -87,14 +88,8 @@ class _ClipboardAppState extends State<ClipboardApp> {
       navigatorKey: _nav,
       title: '剪贴板',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFF4F2B), brightness: Brightness.light),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFF6A47), brightness: Brightness.dark),
-        useMaterial3: true,
-      ),
+      theme: buildInkTheme(Brightness.light),
+      darkTheme: buildInkTheme(Brightness.dark),
       themeMode: ThemeMode.system,
       home: !_ready
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))

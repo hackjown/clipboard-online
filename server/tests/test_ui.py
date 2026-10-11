@@ -83,3 +83,46 @@ def test_owner_delete_visibility(page, server):
     page.click(".card--text .btn--del")
     page.click(".sheet .btn--danger")
     page.wait_for_function("() => !document.querySelector('.card--text') || !document.body.innerText.includes('可删内容')")
+
+
+def test_preview_modal_and_share_page(page, server):
+    """上传两张图 + 一个文本：弹出预览、左右切换、Esc 关闭；分享页脚本可运行（CSP 无内联脚本）。"""
+    page.evaluate("window.__clip.openAuth('register')")
+    page.wait_for_selector("#authUser")
+    page.fill("#authUser", "pvuser")
+    page.fill("#authPw", "demo1234")
+    page.click(".auth-form button[type=submit]")
+    page.wait_for_function("() => window.__clip.state.user && window.__clip.state.user.username === 'pvuser'")
+    png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==")
+    res = page.evaluate("""async (b64) => {
+      const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const out = [];
+      for (const n of ['a.png','b.png']) {
+        const fd = new FormData(); fd.append('file', new Blob([bin], {type:'image/png'}), n);
+        fd.append('visibility','public'); fd.append('expires_in','0');
+        out.push((await (await fetch('/upload_file',{method:'POST',body:fd,credentials:'same-origin'})).json()).uuid);
+      }
+      const fd = new FormData(); fd.append('file', new Blob(['<b>hi</b> & code'], {type:'text/plain'}), 'n.txt');
+      fd.append('visibility','public'); fd.append('expires_in','0');
+      await fetch('/upload_file',{method:'POST',body:fd,credentials:'same-origin'});
+      await window.__clip.refreshScoped();
+      const r = await fetch('/api/items/'+out[0]+'/share',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{"hours":1}'});
+      return (await r.json()).token;
+    }""", png)
+    page.evaluate("window.__clip.setScope('public', {force:true})")
+    page.wait_for_selector(".thumb")
+    page.click(".thumb >> nth=0")
+    page.wait_for_selector(".pv .pv-img")
+    first = page.inner_text(".pv-title")
+    page.keyboard.press("ArrowRight")
+    assert page.inner_text(".pv-title") != first
+    page.keyboard.press("Escape")
+    assert page.locator(".pv").count() == 0
+    # 文本文件预览：纯文本，不解析 HTML
+    page.click("text=预览 >> nth=0")
+    page.wait_for_selector(".pv")
+    page.keyboard.press("Escape")
+    # 分享页
+    page.goto(f"{server}/s/{res}")
+    page.wait_for_selector("#pvimg")
+    assert page.locator(".share-card .fname").count() == 1

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/user.dart';
 import '../services/api.dart';
 import '../services/auth_store.dart';
+import '../theme/ink_theme.dart';
+import '../widgets/ink.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.api, required this.store, required this.onLoggedIn});
@@ -68,81 +70,98 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final t = context.ink;
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                const SizedBox(height: 24),
-                Text('剪贴板', style: theme.textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w900)),
-                Text('Clipboard Online', style: theme.textTheme.titleMedium?.copyWith(color: theme.hintColor)),
-                const SizedBox(height: 28),
-                TextField(
-                  controller: _base,
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  textCapitalization: TextCapitalization.none,
-                  decoration: const InputDecoration(
-                    labelText: '服务器地址',
-                    hintText: 'http://192.168.1.8:8099',
-                    border: OutlineInputBorder(),
+      body: PaperBackground(
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(8, 24, 8, 24),
+                shrinkWrap: true,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                    child: Row(children: [const BrandTitle(big: true)]),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _user,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  textCapitalization: TextCapitalization.none,
-                  keyboardType: TextInputType.visiblePassword,
-                  decoration: const InputDecoration(labelText: '用户名', border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _pass,
-                  obscureText: !_showPass,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  textCapitalization: TextCapitalization.none,
-                  keyboardType: TextInputType.visiblePassword,
-                  decoration: InputDecoration(
-                    labelText: '密码',
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      tooltip: _showPass ? '隐藏密码' : '显示密码',
-                      icon: Icon(_showPass ? Icons.visibility_off : Icons.visibility),
-                      onPressed: () => setState(() => _showPass = !_showPass),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                    child: Text('纸与墨 · 跨设备剪贴板', style: t.monoStyle(12.5, color: t.muted)),
+                  ),
+                  InkCard(
+                    margin: const EdgeInsets.fromLTRB(14, 10, 21, 14),
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(_register ? '注册' : '登录', style: t.serifStyle(24)),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _base,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textCapitalization: TextCapitalization.none,
+                          decoration: const InputDecoration(
+                            labelText: '服务器地址',
+                            hintText: 'http://192.168.1.8:8099',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _user,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textCapitalization: TextCapitalization.none,
+                          keyboardType: TextInputType.visiblePassword,
+                          decoration: const InputDecoration(labelText: '用户名'),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _pass,
+                          obscureText: !_showPass,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textCapitalization: TextCapitalization.none,
+                          keyboardType: TextInputType.visiblePassword,
+                          decoration: InputDecoration(
+                            labelText: '密码',
+                            suffixIcon: IconButton(
+                              tooltip: _showPass ? '隐藏密码' : '显示密码',
+                              icon: Icon(_showPass ? Icons.visibility_off : Icons.visibility),
+                              onPressed: () => setState(() => _showPass = !_showPass),
+                            ),
+                          ),
+                          onSubmitted: (_) => _submit(),
+                        ),
+                        if (_err != null) ...[
+                          const SizedBox(height: 12),
+                          Text(_err!, style: TextStyle(color: t.danger, fontWeight: FontWeight.w700)),
+                          if (_detail != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: SelectableText(_detail!, style: t.monoStyle(11.5, color: t.muted)),
+                            ),
+                        ],
+                        const SizedBox(height: 18),
+                        InkButton(
+                          label: _busy ? '请稍候…' : (_register ? '注册并登录' : '登录'),
+                          variant: InkVariant.accent,
+                          block: true,
+                          busy: _busy,
+                          onPressed: _busy ? null : _submit,
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: _busy ? null : () => setState(() => _register = !_register),
+                          child: Text(_register ? '已有账号？去登录' : '没有账号？去注册'),
+                        ),
+                      ],
                     ),
                   ),
-                  onSubmitted: (_) => _submit(),
-                ),
-                if (_err != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_err!, style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.w600)),
-                  if (_detail != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: SelectableText(
-                        _detail!,
-                        style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, fontSize: 11.5),
-                      ),
-                    ),
                 ],
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: Text(_busy ? '请稍候…' : (_register ? '注册并登录' : '登录')),
-                ),
-                TextButton(
-                  onPressed: _busy ? null : () => setState(() => _register = !_register),
-                  child: Text(_register ? '已有账号？去登录' : '没有账号？去注册'),
-                ),
-              ],
+              ),
             ),
           ),
         ),

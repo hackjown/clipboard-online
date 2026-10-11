@@ -1,3 +1,5 @@
+enum MediaKind { image, video, audio, text, pdf, other }
+
 class ClipItem {
   ClipItem({
     required this.uuid,
@@ -42,6 +44,32 @@ class ClipItem {
   final bool looksMd;
   final bool isUrl;
   final String? mime;
+
+  /// 按 mime / 扩展名判断媒体类型（用于预览）
+  MediaKind get mediaKind {
+    if (isText) return MediaKind.text;
+    final m = (mime ?? '').toLowerCase();
+    final e = ((ext ?? '').isNotEmpty
+            ? ext!
+            : ((filename ?? '').contains('.') ? filename!.split('.').last : ''))
+        .toLowerCase()
+        .replaceAll('.', '');
+    if (isImage || m.startsWith('image/') || const {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic'}.contains(e)) {
+      return MediaKind.image;
+    }
+    if (m.startsWith('video/') || const {'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'}.contains(e)) {
+      return MediaKind.video;
+    }
+    if (m.startsWith('audio/') || const {'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'}.contains(e)) {
+      return MediaKind.audio;
+    }
+    if (m == 'application/pdf' || e == 'pdf') return MediaKind.pdf;
+    if (m.startsWith('text/') ||
+        const {'txt', 'md', 'json', 'log', 'csv', 'xml', 'yaml', 'yml', 'ini', 'py', 'js', 'dart', 'sh'}.contains(e)) {
+      return MediaKind.text;
+    }
+    return MediaKind.other;
+  }
 
   bool get isText => type == 'text';
   bool get isFile => type == 'file';

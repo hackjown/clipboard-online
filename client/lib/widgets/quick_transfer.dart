@@ -9,6 +9,8 @@ import 'package:image_picker/image_picker.dart';
 import '../services/api.dart';
 import '../services/clipboard_watch.dart';
 import '../services/file_transfer.dart';
+import '../theme/ink_theme.dart';
+import 'ink.dart';
 
 /// 「快传」：默认上传到 **私有区**，对端经 WebSocket 实时同步。
 class QuickTransferPanel extends StatefulWidget {
@@ -129,92 +131,98 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
   }
 
   Widget _dropInner(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: _dragging ? cs.primaryContainer.withValues(alpha: 0.55) : cs.surfaceContainerHighest.withValues(alpha: 0.65),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: _dragging ? cs.primary : cs.outlineVariant,
-          width: _dragging ? 2.5 : 1.5,
-        ),
-      ),
+    final t = context.ink;
+    return InkCard(
+      margin: EdgeInsets.zero,
+      color: _dragging ? t.sun : t.paper,
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(Icons.bolt, color: cs.primary),
-              const SizedBox(width: 8),
-              Text('快传', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: t.accent,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: t.line, width: 2),
+                ),
+                child: const Icon(Icons.bolt, size: 18, color: InkTokens.onColor),
+              ),
+              const SizedBox(width: 10),
+              Text('快传', style: t.serifStyle(22)),
               const Spacer(),
-              Text(
-                _isDesktop ? '拖放文件到此处' : '选文件后发送到本账号私有区',
-                style: Theme.of(context).textTheme.bodySmall,
+              Flexible(
+                child: Text(
+                  _isDesktop ? '拖放文件到此处' : '选文件后发送到私有区',
+                  overflow: TextOverflow.ellipsis,
+                  style: t.monoStyle(11.5, color: t.muted).copyWith(height: 1.2),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             '默认上传为「私有」· 登录同一账号的手机 / Mac 会经 WebSocket 实时看到',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            style: TextStyle(fontSize: 12.5, color: t.muted, height: 1.5),
           ),
           const SizedBox(height: 12),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 10,
+            runSpacing: 10,
             children: [
-              FilledButton.tonalIcon(
-                onPressed: _sending ? null : _pickFiles,
-                icon: const Icon(Icons.attach_file),
-                label: const Text('选文件'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _sending ? null : _pickImages,
-                icon: const Icon(Icons.image_outlined),
-                label: const Text('选图片'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _sending ? null : _fromClipboard,
-                icon: const Icon(Icons.paste),
-                label: Text(_isIOS ? '从剪贴板导入' : '粘贴'),
-              ),
-              FilledButton.icon(
+              InkButton(label: '选文件', icon: Icons.attach_file, dense: true, onPressed: _sending ? null : _pickFiles),
+              InkButton(label: '选图片', icon: Icons.image_outlined, dense: true, onPressed: _sending ? null : _pickImages),
+              InkButton(
+                  label: _isIOS ? '从剪贴板导入' : '粘贴',
+                  icon: Icons.paste,
+                  dense: true,
+                  onPressed: _sending ? null : _fromClipboard),
+              InkButton(
+                label: '发送到我的设备',
+                icon: Icons.send,
+                variant: InkVariant.accent,
+                dense: true,
+                busy: _sending,
                 onPressed: (_sending || _queue.isEmpty) ? null : _sendAll,
-                icon: _sending
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.send),
-                label: const Text('发送到我的设备'),
               ),
             ],
           ),
           if (_queue.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             ..._queue.asMap().entries.map((e) {
               final i = e.key;
               final it = e.value;
               final label = it.isText
                   ? '文本 ${(it.textContent?.length ?? 0)} 字'
                   : '${it.filename} · ${_fmt(it.size)}';
-              return ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(it.isText ? Icons.notes : Icons.insert_drive_file_outlined),
-                title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: _sending
-                      ? null
-                      : () => setState(() => _queue.removeAt(i)),
+              return Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.only(left: 10),
+                decoration: BoxDecoration(
+                  color: t.paper2,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: t.line.withValues(alpha: 0.5), width: 1.5),
                 ),
+                child: Row(children: [
+                  Icon(it.isText ? Icons.notes : Icons.insert_drive_file_outlined, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.monoStyle(12.5)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: _sending ? null : () => setState(() => _queue.removeAt(i)),
+                  ),
+                ]),
               );
             }),
           ],
           if (_status != null) ...[
             const SizedBox(height: 6),
-            Text(_status!, style: TextStyle(color: cs.error, fontWeight: FontWeight.w600)),
+            Text(_status!, style: TextStyle(color: t.danger, fontWeight: FontWeight.w600)),
           ],
         ],
       ),
@@ -230,7 +238,7 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
   @override
   Widget build(BuildContext context) {
     final child = Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(14, 10, 21, 8),
       child: _dropInner(context),
     );
     if (!_isDesktop) return child;

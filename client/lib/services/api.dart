@@ -51,6 +51,9 @@ class ClipApi {
   /// 只去掉 \r\n（粘贴常带换行），不动其它字符
   static String cleanPassword(String s) => s.replaceAll(RegExp(r'[\r\n]'), '');
 
+  /// 带 Bearer 的请求头（缩略图 / 视频 / 音频播放等需要）
+  Map<String, String> get authHeaders => _authHeaders;
+
   Map<String, String> get _authHeaders => {
         if (token != null) 'Authorization': 'Bearer $token',
       };

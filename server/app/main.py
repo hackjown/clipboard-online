@@ -62,6 +62,67 @@ _FORBIDDEN = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
 _USER_RE = re.compile(r"^[\w\u4e00-\u9fff.-]{2,32}$")
 _URL_ONLY = re.compile(r"^https?://[^\s]+$", re.I)
 IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "avif"}
+
+# ---- 在线预览白名单：仅按扩展名（不信任客户端 mime）。html/svg/js 等可执行类型永不内联 ----
+_PREVIEW_IMAGE = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
+                  "webp": "image/webp", "bmp": "image/bmp", "avif": "image/avif"}
+_PREVIEW_VIDEO = {"mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+                  "ogv": "video/ogg"}
+_PREVIEW_AUDIO = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac", "wav": "audio/wav",
+                  "ogg": "audio/ogg", "oga": "audio/ogg", "opus": "audio/ogg", "flac": "audio/flac"}
+_PREVIEW_TEXT = {"txt", "md", "markdown", "json", "log", "csv", "tsv", "yaml", "yml", "ini", "toml", "conf",
+                 "py", "js", "ts", "css", "sh", "c", "h", "cpp", "java", "go", "rs", "sql", "xml", "rb", "php"}
+
+
+def preview_kind(filename: str) -> Optional[str]:
+    """image / video / audio / pdf / text；不在白名单返回 None（只能下载）。"""
+    ext = filename.rpartition(".")[2].lower() if "." in (filename or "") else ""
+    if ext in _PREVIEW_IMAGE:
+        return "image"
+    if ext in _PREVIEW_VIDEO:
+        return "video"
+    if ext in _PREVIEW_AUDIO:
+        return "audio"
+    if ext == "pdf":
+        return "pdf"
+    if ext in _PREVIEW_TEXT:
+        return "text"
+    return None
+
+
+def preview_mime(filename: str) -> Optional[str]:
+    ext = filename.rpartition(".")[2].lower() if "." in (filename or "") else ""
+    for m in (_PREVIEW_IMAGE, _PREVIEW_VIDEO, _PREVIEW_AUDIO):
+        if ext in m:
+            return m[ext]
+    if ext == "pdf":
+        return "application/pdf"
+    if ext in _PREVIEW_TEXT:
+        return "text/plain; charset=utf-8"
+    return None
+
+
+_UNSAFE_MIME = re.compile(r"(html|svg|xml|javascript|ecmascript|xhtml)", re.I)
+
+
+def serve_file(path: Path, filename: str, item_mime: Optional[str], inline: bool) -> Response:
+    """统一文件响应：Range(206) 由 FileResponse 提供；白名单类型才可内联，其余强制 attachment；始终 nosniff。"""
+    kind = preview_kind(filename)
+    pm = preview_mime(filename)
+    headers = {"X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes",
+               "X-Frame-Options": "SAMEORIGIN",  # 允许同源页面用 iframe 预览 PDF
+               "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'self'"}
+    if pm and (inline or kind == "image"):
+        # 白名单类型：使用服务端映射的 MIME（文本一律 text/plain，绝不当 HTML 解析）
+        if kind == "pdf":
+            headers["Content-Security-Policy"] = "frame-ancestors 'self'"  # 浏览器内置 PDF 查看器不能被 sandbox
+        return FileResponse(path, filename=filename, media_type=pm, content_disposition_type="inline", headers=headers)
+    media = item_mime or guess_mime(filename)
+    if _UNSAFE_MIME.search(media or ""):
+        media = "application/octet-stream"
+    return FileResponse(path, filename=filename, media_type=media, content_disposition_type="attachment", headers=headers)
+
+
 EXPIRY_PRESETS = {0: None, 3600: 3600, 86400: 86400, 604800: 604800}
 
 def sanitize_filename(name: str | None) -> str:
@@ -624,6 +685,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             fn = i.get("filename", "")
             out["ext"] = fn.rpartition(".")[2].lower() if "." in fn else ""
             out["is_image"] = out["ext"] in IMAGE_EXTS or (out["mime"] or "").startswith("image/")
+            out["preview"] = preview_kind(fn)
         if me and meta:
             out["favorite"] = uid in meta.get("favorites", [])
             out["pinned"] = uid in meta.get("pins", []) and out["mine"]
@@ -875,7 +937,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return {"ok": True, "removed": n}
 
     @app.get("/download/{filename}")
-    def download(request: Request, filename: str):
+    def download(request: Request, filename: str, inline: int = 0):
         me = current_user(request)
         item = next((i for i in store.list_items() if i["type"] == "file" and i.get("filename") == filename), None)
         if not item:
@@ -885,11 +947,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         path = store.file_path(filename)
         if not path or not path.is_file():
             raise HTTPException(404, "文件不存在")
-        media = item.get("mime") or guess_mime(filename)
-        # images inline for thumbnails when same-origin
-        inline = media.startswith("image/")
-        return FileResponse(path, filename=filename, media_type=media,
-                            content_disposition_type="inline" if inline else "attachment")
+        return serve_file(path, filename, item.get("mime"), bool(inline))
 
     # ---- share ----
     @app.post("/api/items/{uid}/share")
@@ -944,21 +1002,19 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             out["filename"] = item.get("filename")
             out["ext"] = (item.get("filename") or "").rpartition(".")[2].lower()
             out["is_image"] = out["ext"] in IMAGE_EXTS
+            out["preview"] = preview_kind(item.get("filename") or "")
             out["download_url"] = f"/s/{token}/file"
         return out
 
     @app.get("/s/{token}/file")
-    def share_file(token: str):
+    def share_file(token: str, inline: int = 0):
         item = store.find_by_share(token)
         if not item or item.get("type") != "file":
             raise HTTPException(404, "分享不存在或已过期")
         path = store.file_path(item["filename"])
         if not path or not path.is_file():
             raise HTTPException(404, "文件不存在")
-        media = item.get("mime") or guess_mime(item["filename"])
-        inline = media.startswith("image/")
-        return FileResponse(path, filename=item["filename"], media_type=media,
-                            content_disposition_type="inline" if inline else "attachment")
+        return serve_file(path, item["filename"], item.get("mime"), bool(inline))
 
     @app.get("/api/share/{token}/qr")
     def share_qr(request: Request, token: str):

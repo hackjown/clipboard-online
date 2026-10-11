@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/item.dart';
@@ -15,7 +16,10 @@ import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
 import '../services/notifier.dart';
 import '../services/share_inbox.dart';
+import '../theme/ink_theme.dart';
+import '../widgets/ink.dart';
 import '../widgets/item_card.dart';
+import 'media_preview_screen.dart';
 import '../widgets/quick_transfer.dart';
 import 'share_sheet.dart';
 
@@ -54,14 +58,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   String? _err;
   bool _watchOn = false;
 
+  String get _tabKey => 'last_tab_${widget.user.username}';
+
+  Future<void> _restoreTab() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final v = sp.getInt(_tabKey);
+      if (v != null && v != _tabs.index && mounted) _tabs.index = v;
+    } catch (_) {}
+  }
+
+  Future<void> _saveTab() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setInt(_tabKey, _tabs.index);
+    } catch (_) {}
+  }
+
   String get _scope => _tabs.index == 0 ? 'public' : 'private';
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    // 登录后默认进「我的私有」，并记住上次选择
+    _tabs = TabController(length: 2, vsync: this, initialIndex: 1);
+    _restoreTab();
     _tabs.addListener(() {
       if (!_tabs.indexIsChanging) {
+        _saveTab();
         _refresh();
         if (_tabs.index == 1) Notifier.instance.clearUnread();
       }
@@ -414,31 +438,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final isMac = !kIsWeb && Platform.isMacOS;
     return Scaffold(
       appBar: AppBar(
-        title: Text('剪贴板 · @${widget.user.username}'),
+        titleSpacing: 14,
+        title: BrandTitle(suffix: '@${widget.user.username}'),
         actions: [
           if (isMac)
-            IconButton(
+            InkIconButton(
+              plain: true,
+              size: 40,
               tooltip: _watchOn ? '关闭剪贴板监听' : '监听剪贴板',
               onPressed: () => _toggleWatch(!_watchOn),
-              icon: Icon(_watchOn ? Icons.content_paste_go : Icons.content_paste),
+              icon: _watchOn ? Icons.content_paste_go : Icons.content_paste,
             ),
-          IconButton(
-            tooltip: '从剪贴板导入',
-            onPressed: () => _clip.importOnce(),
-            icon: const Icon(Icons.paste),
-          ),
-          IconButton(tooltip: '设置', onPressed: widget.onOpenSettings, icon: const Icon(Icons.settings_outlined)),
-          IconButton(tooltip: '退出', onPressed: widget.onLogout, icon: const Icon(Icons.logout)),
+          InkIconButton(plain: true, size: 40, tooltip: '从剪贴板导入', onPressed: () => _clip.importOnce(), icon: Icons.paste),
+          InkIconButton(plain: true, size: 40, tooltip: '设置', onPressed: widget.onOpenSettings, icon: Icons.settings_outlined),
+          InkIconButton(plain: true, size: 40, tooltip: '退出', onPressed: widget.onLogout, icon: Icons.logout),
+          const SizedBox(width: 6),
         ],
-        bottom: TabBar(
-          controller: _tabs,
-          tabs: [
-            Tab(text: '公共 ${_counts['public'] ?? ''}'),
-            Tab(text: '我的私有 ${_counts['private'] ?? ''}'),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Container(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+            child: AnimatedBuilder(
+              animation: _tabs,
+              builder: (_, __) => InkSegment(
+                labels: const ['公共', '我的私有'],
+                counts: ['${_counts['public'] ?? ''}', '${_counts['private'] ?? ''}'],
+                index: _tabs.index,
+                onChanged: (i) => _tabs.animateTo(i),
+              ),
+            ),
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: InkButton(
+        label: '添加',
+        icon: Icons.add,
+        variant: InkVariant.accent,
         onPressed: () async {
           final a = await showModalBottomSheet<String>(
             context: context,
@@ -460,10 +496,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           if (a == 'file') _pickFile();
           if (a == 'paste') _clip.importOnce();
         },
-        icon: const Icon(Icons.add),
-        label: const Text('添加'),
       ),
-      body: Column(
+      body: PaperBackground(child: Column(
         children: [
           QuickTransferPanel(
             api: widget.api,
@@ -478,8 +512,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
                 hintText: '搜索文本、文件名或用户名',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                isDense: true,
               ),
               onChanged: (v) {
                 _q = v.trim();
@@ -502,17 +534,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       itemCount: _items.isEmpty ? 1 : _items.length,
                       itemBuilder: (ctx, i) {
                         if (_items.isEmpty) {
-                          return const SizedBox(
+                          return SizedBox(
                             height: 240,
-                            child: Center(child: Text('暂无内容，下拉刷新或点击添加')),
+                            child: Center(child: Text('暂无内容，下拉刷新或点击添加', style: TextStyle(color: context.ink.muted))),
                           );
                         }
                         final it = _items[i];
                         return ItemCard(
                           item: it,
-                          imageUrl: it.isImage && it.filename != null
+                          imageUrl: it.mediaKind == MediaKind.image && it.filename != null
                               ? widget.api.downloadUrl(it.filename!)
                               : null,
+                          headers: widget.api.authHeaders,
+                          onOpen: () => Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => MediaPreviewScreen(api: widget.api, item: it)),
+                          ),
                           onCopy: () async {
                             if (it.isText) {
                               await _clip.copyText(it.content ?? '');
@@ -566,7 +602,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 }

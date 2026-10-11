@@ -28,6 +28,7 @@
     plus: P('M12 5v14M5 12h14'),
     upload: P('M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3'),
     download: P('M12 4v12M7 11l5 5 5-5M4 20h16'),
+    eye: P('M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z') + '<circle cx="12" cy="12" r="3"/>',
     search: '<circle cx="11" cy="11" r="6.5"/>' + P('m20 20-4.2-4.2'),
     text: P('M5 6h14M5 11h14M5 16h9'),
     file: P('M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v5h5'),
@@ -234,12 +235,19 @@
     ta.remove(); return ok;
   }
 
-  function openLightbox(src) {
-    const lb = h('div', { class: 'lightbox', onclick: (e) => { if (e.target === lb || e.target.tagName === 'IMG') lb.remove(); } },
-      h('img', { src, alt: '预览' }));
-    document.body.append(lb);
-    const onKey = (e) => { if (e.key === 'Escape') { lb.remove(); document.removeEventListener('keydown', onKey); } };
-    document.addEventListener('keydown', onKey);
+  // 预览：当前列表中所有可预览的文件（图片可左右切换）；inline=1 走白名单内联端点
+  function previewItems() {
+    return state.items.filter((x) => matches(x) && x.type === 'file' && x.preview).map((x) => ({
+      id: x.uuid, name: x.filename, kind: x.preview, size: x.size,
+      src: '/download/' + encodeURIComponent(x.filename) + '?inline=1',
+      dl: '/download/' + encodeURIComponent(x.filename),
+    }));
+  }
+  function openPreview(it) {
+    const list = previewItems();
+    let i = list.findIndex((x) => x.id === it.uuid);
+    if (i < 0) return;
+    window.ClipPreview.open(list, i);
   }
 
   function makeCard(it) {
@@ -368,12 +376,18 @@
       const sub = h('div', { class: 'fsub', text: `${(it.ext || '—').toUpperCase()} · ${fmtSize(it.size)}` });
       if (it.is_image) {
         const src = '/download/' + encodeURIComponent(it.filename);
-        const img = h('img', { class: 'thumb', src, alt: it.filename, loading: 'lazy', onclick: () => openLightbox(src) });
+        const img = h('img', { class: 'thumb', src, alt: it.filename, loading: 'lazy', onclick: () => openPreview(it) });
         art.append(img);
       }
-      art.append(h('div', { class: 'file-row' }, fileTile(it.ext), h('div', { class: 'fmeta' }, name, sub)));
+      const row = h('div', { class: 'file-row' + (it.preview ? ' pv-able' : '') }, fileTile(it.ext), h('div', { class: 'fmeta' }, name, sub));
+      if (it.preview && !it.is_image) { row.onclick = () => openPreview(it); row.title = '点击预览'; }
+      art.append(row);
       const dl = h('a', { class: 'btn btn--ink sm', href: '/download/' + encodeURIComponent(it.filename), download: it.filename }, icon('download'), h('span', { text: '下载' }));
       actions.prepend(dl);
+      if (it.preview) {
+        const pv = h('button', { class: 'btn sm', type: 'button', onclick: () => openPreview(it) }, icon('eye'), h('span', { text: '预览' }));
+        actions.prepend(pv);
+      }
       art.append(actions);
       card.setQuery = (q) => { if (card.q === q) return; card.q = q; name.replaceChildren(...highlight(it.filename, q)); };
       card.tick = () => { timeEl.replaceChildren(fmtTime(it.created)); timeEl.title = fmtFull(it.created); };
