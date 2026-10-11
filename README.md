@@ -63,6 +63,8 @@ flutter run -d macos
 | `clipboard-macos.zip` | macOS `.app`，**未签名、未公证**：右键 →「打开」，或 `xattr -cr clipboard_client.app` |
 | `clipboard-ios-unsigned.zip` | iOS **未签名** `Runner.app`，**不能直接安装**；需用 Xcode / AltStore / 自有证书重新签名 |
 
+> **macOS 说明**：CI 产出的 macOS 应用未签名，没有 Keychain 权限（-34018），因此登录令牌回退保存到本地应用偏好设置（SharedPreferences）；iOS/Android 仍使用 Keychain/Keystore。
+
 服务端 Docker 镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`（`v*` 标签同时推 `latest` 与版本号）。
 私有仓库的镜像默认私有，拉取前先 `docker login ghcr.io`（用有 `read:packages` 的 PAT）。
 

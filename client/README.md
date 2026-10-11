@@ -75,6 +75,8 @@ App Bundle（上架）：
 flutter build appbundle --release
 ```
 
+> macOS 应用未签名：令牌回退保存到本地应用偏好设置（SharedPreferences），不使用 Keychain（避免 -34018）。iOS/Android 仍用 Keychain/Keystore。
+
 ## macOS 构建
 
 ```bash
