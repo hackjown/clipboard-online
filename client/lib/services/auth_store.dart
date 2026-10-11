@@ -29,9 +29,19 @@ class AuthStore {
     return p.getString(_baseKey) ?? defaultBase;
   }
 
-  Future<void> setBaseUrl(String url) async {
+  /// 规范化服务器地址：去空白/不可见字符、补 http://、去掉末尾 /
+  static String normalizeBaseUrl(String input) {
+    var u = input.replaceAll(RegExp(r'[\s\u200B-\u200D\uFEFF]'), '');
+    if (u.isEmpty) return defaultBase;
+    if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(u)) u = 'http://$u';
+    return u.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  Future<String> setBaseUrl(String url) async {
+    final normalized = normalizeBaseUrl(url);
     final p = await SharedPreferences.getInstance();
-    await p.setString(_baseKey, url.replaceAll(RegExp(r'/+$'), ''));
+    await p.setString(_baseKey, normalized);
+    return normalized;
   }
 
   Future<String?> getToken() => _read(_tokenKey, _tokenFallbackKey);

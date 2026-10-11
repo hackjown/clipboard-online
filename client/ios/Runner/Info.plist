@@ -84,6 +84,8 @@
 	<string>用于从相册选择图片，以及接收系统分享到剪贴板的图片</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>

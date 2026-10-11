@@ -9,9 +9,20 @@ import '../models/user.dart';
 import 'auth_store.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.status});
+  ApiException(this.message, {this.status, this.method, this.url});
   final String message;
   final int? status;
+  final String? method;
+  final String? url;
+
+  /// 例如 "POST http://host:8100/api/login → HTTP 401"
+  String get requestInfo {
+    final parts = <String>[];
+    if (url != null) parts.add('${method ?? 'GET'} $url');
+    if (status != null) parts.add('HTTP $status');
+    return parts.join(' → ');
+  }
+
   @override
   String toString() => message;
 }
@@ -23,9 +34,18 @@ class ClipApi {
   String base = AuthStore.defaultBase;
 
   Future<void> load() async {
-    base = await store.getBaseUrl();
+    base = AuthStore.normalizeBaseUrl(await store.getBaseUrl());
     token = await store.getToken();
   }
+
+  /// 用输入框的值立即更新（并持久化）服务器地址，返回规范化结果
+  Future<String> setBase(String input) async {
+    base = await store.setBaseUrl(input);
+    return base;
+  }
+
+  /// 只去掉 \r\n（粘贴常带换行），不动其它字符
+  static String cleanPassword(String s) => s.replaceAll(RegExp(r'[\r\n]'), '');
 
   Map<String, String> get _authHeaders => {
         if (token != null) 'Authorization': 'Bearer $token',
@@ -46,6 +66,8 @@ class ClipApi {
       throw ApiException(
         (body['error'] ?? body['detail'] ?? '请求失败 (${r.statusCode})').toString(),
         status: r.statusCode,
+        method: r.request?.method,
+        url: r.request?.url.toString(),
       );
     }
     return body;
@@ -53,8 +75,11 @@ class ClipApi {
 
   Future<ClipUser> register(String username, String password) async {
     final r = await http.post(_u('/api/register'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}));
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({
+          'username': username.trim(),
+          'password': cleanPassword(password),
+        })));
     final j = await _json(r);
     token = j['token'] as String?;
     final user = ClipUser.fromJson(j['user'] as Map<String, dynamic>);
@@ -64,8 +89,11 @@ class ClipApi {
 
   Future<ClipUser> login(String username, String password) async {
     final r = await http.post(_u('/api/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}));
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({
+          'username': username.trim(),
+          'password': cleanPassword(password),
+        })));
     final j = await _json(r);
     token = j['token'] as String?;
     final user = ClipUser.fromJson(j['user'] as Map<String, dynamic>);

@@ -102,10 +102,7 @@ class _ClipboardAppState extends State<ClipboardApp> {
               ? LoginScreen(
                   api: _api,
                   store: _store,
-                  onLoggedIn: () async {
-                    _user = await _api.me();
-                    setState(() {});
-                  },
+                  onLoggedIn: (user) => setState(() => _user = user),
                 )
               : HomeScreen(
                   api: _api,
