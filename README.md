@@ -52,6 +52,20 @@ flutter run -d macos
 - **Android**：完整客户端；`flutter build apk --release` 见 client/README
 - **iOS 分享入**：Share Extension 源码在 `client/ios/Share Extension/`，签名步骤见 `client/ios/SHARE_EXTENSION.md`
 
+
+## 下载（GitHub Releases）
+
+推送 `v*` 标签（如 `v0.1.0`）后，CI 自动发布 Release，包含：
+
+| 文件 | 说明 |
+| --- | --- |
+| `clipboard-android.apk` | Android 安装包（debug 签名，可直接侧载） |
+| `clipboard-macos.zip` | macOS `.app`，**未签名、未公证**：右键 →「打开」，或 `xattr -cr clipboard_client.app` |
+| `clipboard-ios-unsigned.zip` | iOS **未签名** `Runner.app`，**不能直接安装**；需用 Xcode / AltStore / 自有证书重新签名 |
+
+服务端 Docker 镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`（`v*` 标签同时推 `latest` 与版本号）。
+私有仓库的镜像默认私有，拉取前先 `docker login ghcr.io`（用有 `read:packages` 的 PAT）。
+
 ## 推送到 GitHub
 
 本仓库已在本地 `git init` 并完成初始提交。在你本机或 1:1 会话里登录 `gh` 后：
