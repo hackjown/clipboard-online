@@ -209,8 +209,17 @@
   const cache = new Map();
   let polling = false, again = null, pollTimer = null;
 
+  // 本设备 ID（随机 UUID，仅存本机）：随写入请求发送，用于 Bark「不推送本设备发出的内容」
+  const DEVICE_ID = (() => {
+    try {
+      let d = localStorage.getItem('clip-device-id');
+      if (!d) { d = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)); localStorage.setItem('clip-device-id', d); }
+      return d;
+    } catch (_) { return ''; }
+  })();
+
   async function api(path, opt = {}) {
-    const init = { method: opt.method || 'GET', credentials: 'same-origin', headers: {} };
+    const init = { method: opt.method || 'GET', credentials: 'same-origin', headers: { 'X-Device-Id': DEVICE_ID } };
     if (opt.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opt.body); }
     const r = await fetch(path, init);
     let data = null; try { data = await r.json(); } catch (_) {}
@@ -828,7 +837,7 @@
       };
       xhr.onerror = () => fail('网络错误');
       xhr.onabort = () => { u.status = 'error'; resolve(); };
-      xhr.open('POST', '/upload_file'); xhr.withCredentials = true; xhr.send(fd);
+      xhr.open('POST', '/upload_file'); xhr.withCredentials = true; xhr.setRequestHeader('X-Device-Id', DEVICE_ID); xhr.send(fd);
     });
   }
   function renderPill() {
@@ -941,12 +950,40 @@
         row('pk-all', 'trash', '清空我的全部', '私有 + 我的公共', 'all')),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
+  function openBarkSettings() {
+    const err = h('p', { class: 'err', hidden: true, role: 'alert' });
+    const input = h('input', { type: 'url', id: 'barkUrl', placeholder: 'https://api.day.app/你的Key', autocomplete: 'off', spellcheck: 'false', maxlength: '512' });
+    const skip = h('input', { type: 'checkbox', id: 'barkSkip' });
+    const test = h('button', { type: 'button', class: 'btn' }, '测试');
+    const save = h('button', { type: 'submit', class: 'btn btn--accent' }, '保存');
+    const show = (m) => { err.textContent = m; err.hidden = !m; };
+    const body = () => ({ bark_url: input.value.trim(), bark_exclude_device: skip.checked ? DEVICE_ID : '' });
+    test.addEventListener('click', () => {
+      show(''); test.disabled = true;
+      api('/api/settings/bark/test', { method: 'POST', body: { bark_url: input.value.trim() } })
+        .then(() => toast('测试推送已发送，请查看手机')).catch((e) => show(e.message)).finally(() => { test.disabled = false; });
+    });
+    const form = h('form', { class: 'auth-form', onsubmit: (e) => {
+      e.preventDefault(); show(''); save.disabled = true;
+      api('/api/settings/bark', { method: 'PUT', body: body() })
+        .then((d) => { toast(d.configured ? 'Bark 已保存' : 'Bark 已关闭'); closeSheet(); })
+        .catch((ex) => show(ex.message)).finally(() => { save.disabled = false; });
+    } },
+      h('label', { class: 'field' }, h('span', { text: 'Bark 推送地址' }), input),
+      h('label', { class: 'field', style: 'display:flex;gap:8px;align-items:center' }, skip, h('span', { text: '不推送本设备发出的内容' })),
+      err, h('div', { class: 'btn-row' }, test, save));
+    showSheet('bark', h('div', {}, h('h2', { id: 'sheetTitle', text: 'Bark 推送' }),
+      h('p', { class: 'lead', text: '在 iPhone 安装 Bark，复制其中的设备地址粘贴到这里。你的私有区有新内容时会推送（留空并保存即关闭）。' }), form));
+    api('/api/settings/bark').then((d) => { input.value = d.bark_url || ''; skip.checked = !!d.bark_exclude_device && d.bark_exclude_device === DEVICE_ID; }).catch(() => {});
+  }
+
   function openAccountMenu() {
     if (!state.user) { openAuth('login'); return; }
     showSheet('account', h('div', {}, h('h2', { id: 'sheetTitle', text: '@' + state.user.username }),
       h('div', { class: 'pick' },
         h('button', { type: 'button', onclick: () => { closeSheet(); setScope('private'); } }, h('span', { class: 'pk-ico pk-text' }, icon('lock')), h('span', {}, h('b', { text: '我的私有' }), h('small', { text: `${state.counts.private} 条` }))),
         h('button', { type: 'button', onclick: () => { closeSheet(); setStarred(true); } }, h('span', { class: 'pk-ico pk-file' }, icon('star')), h('span', {}, h('b', { text: '我的收藏' }), h('small', { text: `${state.counts.starred || 0} 条` }))),
+        h('button', { type: 'button', onclick: () => openBarkSettings() }, h('span', { class: 'pk-ico pk-text' }, icon('check')), h('span', {}, h('b', { text: 'Bark 推送' }), h('small', { text: '新私有内容推送到 iPhone' }))),
         h('button', { type: 'button', onclick: () => openClearMenu() }, h('span', { class: 'pk-ico pk-file' }, icon('trash')), h('span', {}, h('b', { text: '清空内容' }), h('small', { text: '只清自己的' }))),
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),

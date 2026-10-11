@@ -1,7 +1,11 @@
 """Clipboard Online — 多用户 + 分享/过期/实时/收藏等增强版。"""
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
+import logging
+import socket
 import hmac
 import html
 import json
@@ -189,9 +193,10 @@ class Store:
         self.users_path = data_dir / "users.json"
         self.meta_path = data_dir / "user_meta.json"
         self.og_path = data_dir / "og_cache.json"
+        self.bark_path = data_dir / "bark.json"
         self.lock = threading.RLock()
         self.uploads.mkdir(parents=True, exist_ok=True)
-        for p, default in ((self.items_path, []), (self.users_path, []), (self.meta_path, {}), (self.og_path, {})):
+        for p, default in ((self.items_path, []), (self.users_path, []), (self.meta_path, {}), (self.og_path, {}), (self.bark_path, {})):
             if not p.exists():
                 self._write_json(p, default)
         self._migrate()
@@ -292,6 +297,24 @@ class Store:
                 "tags": dict(meta.get("tags") or {}),
             }
             self._write_json(self.meta_path, allm)
+
+    # bark（每个用户一条；仅本人可读，绝不出现在 items / 其他用户数据里）
+    def get_bark(self, user_id: str) -> dict:
+        with self.lock:
+            allb = self._read_json(self.bark_path)
+            b = (allb.get(user_id) if isinstance(allb, dict) else None) or {}
+            return {"url": str(b.get("url") or ""), "exclude_device": str(b.get("exclude_device") or "")}
+
+    def set_bark(self, user_id: str, url: str, exclude_device: str) -> None:
+        with self.lock:
+            allb = self._read_json(self.bark_path)
+            if not isinstance(allb, dict):
+                allb = {}
+            if url:
+                allb[user_id] = {"url": url, "exclude_device": exclude_device}
+            else:
+                allb.pop(user_id, None)
+            self._write_json(self.bark_path, allb)
 
     # items
     def _raw_items(self) -> list[dict]:
@@ -443,14 +466,48 @@ class Store:
             self._write_json(self.og_path, cache)
 
 
+# ---- Bark 推送（SSRF 防护：仅 http/https，默认拒绝内网 / 回环 / 链路本地地址）----
+log = logging.getLogger("clipboard.bark")
+
+
+def _ip_blocked(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return True
+    return (a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_reserved
+            or a.is_unspecified or (a.version == 6 and a.ipv4_mapped is not None and _ip_blocked(str(a.ipv4_mapped))))
+
+
+def check_bark_url(raw: str, allow_private: bool) -> str:
+    """校验并规范化 Bark 地址；不合法抛 ValueError（文案可直接给用户看）。"""
+    u = (raw or "").strip()
+    if len(u) > 512:
+        raise ValueError("地址过长")
+    pu = urlparse(u)
+    if pu.scheme not in ("http", "https") or not pu.hostname:
+        raise ValueError("Bark 地址必须以 http:// 或 https:// 开头，例如 https://api.day.app/你的Key")
+    if pu.username or pu.password:
+        raise ValueError("地址里不要包含用户名/密码")
+    if not allow_private:
+        try:
+            infos = socket.getaddrinfo(pu.hostname, pu.port or (443 if pu.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+        except OSError:
+            raise ValueError("无法解析 Bark 服务器域名")
+        if not infos or any(_ip_blocked(i[4][0]) for i in infos):
+            raise ValueError("出于安全考虑，不允许推送到内网 / 本机地址（自建 Bark 在内网请设置环境变量 CLIP_BARK_ALLOW_PRIVATE=1）")
+    return u.rstrip("/") if not pu.query else u
+
+
 def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = None,
-               max_upload_mb: Optional[int] = None) -> FastAPI:
+               max_upload_mb: Optional[int] = None, bark_allow_private: Optional[bool] = None) -> FastAPI:
     data_path = Path(data_dir or os.environ.get("CLIP_DATA_DIR") or (BASE_DIR.parent / "data"))
     store = Store(data_path)
     hub = Hub()
     allow_reg = allow_register if allow_register is not None else _env_bool("CLIP_REGISTER", True)
     max_upload = (max_upload_mb if max_upload_mb is not None else _env_int("CLIP_MAX_UPLOAD_MB", 200)) * 1024 * 1024
     max_text = _env_int("CLIP_MAX_TEXT_KB", 1024) * 1024
+    bark_private = bark_allow_private if bark_allow_private is not None else _env_bool("CLIP_BARK_ALLOW_PRIVATE", False)
 
     secret_file = data_path / ".secret"
     if not secret_file.exists():
@@ -515,6 +572,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     app = FastAPI(title="Clipboard Online", version="2.0.0", docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
     app.state.store = store
     app.state.hub = hub
+    app.state.bark_transport = None  # 测试注入 httpx.MockTransport
 
     CSP = ("default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; "
            "script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -708,6 +766,98 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         await hub.broadcast({"type": kind, "uuid": (item or {}).get("uuid"), "visibility": visibility or (item or {}).get("visibility"),
                              "owner_id": oid, "ts": time.time()}, public=pub, owner_id=oid)
 
+    # ---- Bark ----
+    bark_tasks: set = set()
+
+    async def bark_send(url: str, title: str, body: str, open_url: Optional[str] = None) -> tuple[bool, str]:
+        """发送一次 Bark 推送（POST JSON）。返回 (成功, 说明)。短超时、不跟随重定向，发送前再次校验目的地。"""
+        try:
+            url = await asyncio.to_thread(check_bark_url, url, bark_private)
+        except ValueError as e:
+            return False, str(e)
+        payload = {"title": title, "body": body, "group": "clipboard"}
+        if open_url:
+            payload["url"] = open_url
+        try:
+            kw = {"transport": app.state.bark_transport} if getattr(app.state, "bark_transport", None) else {}
+            async with httpx.AsyncClient(timeout=4.0, follow_redirects=False, **kw) as c:
+                r = await c.post(url, json=payload)
+            if 200 <= r.status_code < 300:
+                return True, "ok"
+            return False, f"Bark 服务器返回 HTTP {r.status_code}: {r.text[:120]}"
+        except Exception as e:  # noqa: BLE001
+            return False, f"请求 Bark 失败：{type(e).__name__}: {e}"[:200]
+
+    async def bark_notify_item(user_id: str, item: dict, device_id: str, base_url: str) -> None:
+        try:
+            cfg = store.get_bark(user_id)
+            if not cfg["url"]:
+                return
+            if device_id and cfg["exclude_device"] and device_id == cfg["exclude_device"]:
+                return
+            if item["type"] == "text":
+                txt = (item.get("content") or "").strip().replace("\n", " ")
+                body = txt[:60] + ("…" if len(txt) > 60 else "")
+            else:
+                body = item.get("filename") or "文件"
+            ok, msg = await bark_send(cfg["url"], "剪贴板：收到新内容", body, base_url or None)
+            if not ok:
+                log.warning("bark push failed for user %s: %s", user_id, msg)
+        except Exception:  # noqa: BLE001
+            log.exception("bark push crashed")
+
+    def bark_schedule(me: dict, item: dict, request: Request) -> None:
+        """私有条目创建后异步推送（失败只记日志）。"""
+        if item.get("visibility") != "private":
+            return
+        dev = (request.headers.get("x-device-id") or "").strip()[:64]
+        base = str(request.base_url).rstrip("/") + "/"
+        task = asyncio.get_running_loop().create_task(bark_notify_item(me["id"], item, dev, base))
+        bark_tasks.add(task)
+        task.add_done_callback(bark_tasks.discard)
+
+    @app.get("/api/settings/bark")
+    def get_bark_settings(request: Request):
+        me = require_user(request)
+        b = store.get_bark(me["id"])
+        return {"ok": True, "bark_url": b["url"], "bark_exclude_device": b["exclude_device"], "configured": bool(b["url"])}
+
+    @app.put("/api/settings/bark")
+    async def put_bark_settings(request: Request):
+        me = require_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求格式错误")
+        raw = str(body.get("bark_url") or "").strip()
+        url = ""
+        if raw:
+            try:
+                url = await asyncio.to_thread(check_bark_url, raw, bark_private)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        exclude = str(body.get("bark_exclude_device") or body.get("exclude_device") or "").strip()[:64]
+        store.set_bark(me["id"], url, exclude)
+        return {"ok": True, "bark_url": url, "bark_exclude_device": exclude, "configured": bool(url)}
+
+    @app.post("/api/settings/bark/test")
+    async def test_bark(request: Request):
+        me = require_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        raw = str((body or {}).get("bark_url") or "").strip() if isinstance(body, dict) else ""
+        url = raw or store.get_bark(me["id"])["url"]
+        if not url:
+            raise HTTPException(400, "还没有设置 Bark 地址")
+        ok, msg = await bark_send(url, "剪贴板：测试推送", f"@{me['username']} 的 Bark 推送已连通", str(request.base_url).rstrip("/") + "/")
+        if not ok:
+            raise HTTPException(502, msg)
+        return {"ok": True}
+
     # ---- items list ----
     @app.get("/api/items")
     def api_items(request: Request, q: str = "", type: str = "all", scope: str = "all",
@@ -782,6 +932,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             meta["tags"][uid] = [str(t).strip()[:32] for t in tags if str(t).strip()][:8]
             store.save_meta(me["id"], meta)
         await emit("create", item)
+        bark_schedule(me, item, request)
         return {"ok": True, "uuid": uid, "visibility": vis, "expires_at": exp}
 
     @app.post("/upload_file")
@@ -834,6 +985,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             meta["tags"][uid] = [t.strip()[:32] for t in tags.split(",") if t.strip()][:8]
             store.save_meta(me["id"], meta)
         await emit("create", item)
+        bark_schedule(me, item, request)
         return {"ok": True, "uuid": uid, "filename": name, "size": size, "visibility": vis, "expires_at": exp}
 
     @app.post("/delete")

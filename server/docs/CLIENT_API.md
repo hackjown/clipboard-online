@@ -201,6 +201,13 @@ Deep link 建议：`{BASE}/s/{token}`（App 可注册 Universal Link / App Link�
 
 ---
 
+### Bark 推送设置
+
+- `GET /api/settings/bark` → `{ok, bark_url, bark_exclude_device, configured}`（需登录，仅本人）
+- `PUT /api/settings/bark`，JSON `{"bark_url": "https://api.day.app/<key>", "bark_exclude_device": "<本设备ID，可空>"}`；`bark_url` 为空即关闭。仅允许 http/https，默认拒绝内网 / 回环地址。
+- `POST /api/settings/bark/test`，JSON `{"bark_url": "..."}`（可省略则用已保存的）→ 发送测试推送；失败返回 502 与原因。
+- 写入接口（`/content`、`/upload_file`）可带请求头 `X-Device-Id`；与 `bark_exclude_device` 相同则不对该次写入推送。
+
 ## 9. 错误格式
 
 HTTP 4xx/5xx，body 统一：

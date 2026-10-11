@@ -85,7 +85,15 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.4）
+## 本版新增（v0.1.5 / v0.1.6）
+
+- **iOS 安装包怎么选**：
+  - **TrollStore** → 用 `clipboard-ios-trollstore.ipa`（CI 用 ldid 伪签，并给主 App 与分享扩展写入 App Group entitlement）。
+  - **AltStore / Sideloadly** → 用 `clipboard-ios-unsigned.ipa`，由工具重签（免费 Apple ID 没有 App Group，分享扩展会在分享面板里登录一次后直传，详见 `client/ios/SHARE_EXTENSION.md`）。
+- **分享扩展重写**：扩展自己读取分享内容并直接上传到私有区，面板里显示进度与精确错误；不再依赖 App Group / 跳回主 App（旧版在 App Group 不可用时会崩溃）。
+- **Bark 推送**：在 iPhone 安装 [Bark](https://github.com/Finb/Bark)，复制其中的设备地址（形如 `https://api.day.app/你的Key`），粘贴到 Web「账号菜单 → Bark 推送」或客户端「设置 → Bark 推送地址」，点「测试」。之后你的**私有**内容被创建时，服务端会异步推送「剪贴板：收到新内容」（文本前 60 字 / 文件名）。侧载或 TrollStore 的 iPhone 同样可用 —— Bark 走自己的 APNs，不依赖本 App 的推送能力。可勾选「不推送本设备发出的内容」（客户端随写入请求发送 `X-Device-Id`）。出于 SSRF 防护，只允许 http/https，且默认拒绝内网 / 回环地址；自建在内网的 Bark 需设置环境变量 `CLIP_BARK_ALLOW_PRIVATE=1`。
+
+## 更早的版本（v0.1.4）
 
 - **Web 文件预览**：图片（缩放、上一张/下一张）、视频 / 音频（HTTP Range，206）、PDF（iframe）、文本 / 代码 / JSON（前 200KB，纯文本渲染）；分享页 `/s/<token>` 同样可预览。内联端点 `GET /download/<name>?inline=1`、`GET /s/<token>/file?inline=1` 仅对白名单类型内联，**html / svg / js 等一律强制下载**，并带 `nosniff` 与 CSP sandbox；私有 / 过期规则不变。
 - **客户端**：「纸与墨」主题、媒体预览、新图标、macOS 菜单栏模式，详见 `client/README.md`。

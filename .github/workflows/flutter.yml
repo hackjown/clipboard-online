@@ -83,6 +83,52 @@ jobs:
         with:
           name: ios-unsigned
           path: clipboard-ios-unsigned.ipa
+      - name: ldid fake-sign for TrollStore (explicit entitlements)
+        run: |
+          brew install ldid
+          ENT_DIR="$RUNNER_TEMP/ent"
+          mkdir -p "$ENT_DIR"
+          GROUP="group.com.clipboard.online.clipboardClient"
+          for n in runner ext; do
+            cat > "$ENT_DIR/$n.ent" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.application-groups</key>
+            <array>
+              <string>$GROUP</string>
+            </array>
+          </dict>
+          </plist>
+          EOF
+          done
+          rm -rf ts && mkdir -p ts/Payload
+          cp -R build/ios/iphoneos/Runner.app ts/Payload/
+          APP=ts/Payload/Runner.app
+          # 先签嵌入的 framework / 扩展，最后签主 App
+          if [ -d "$APP/Frameworks" ]; then
+            for f in "$APP"/Frameworks/*.framework; do ldid -S "$f"; done
+          fi
+          for x in "$APP"/PlugIns/*.appex; do ldid -S"$ENT_DIR/ext.ent" "$x"; done
+          ldid -S"$ENT_DIR/runner.ent" "$APP"
+          echo "=== entitlements: Runner.app ==="
+          ldid -e "$APP" | tee "$RUNNER_TEMP/runner-ent.txt"
+          grep -q "$GROUP" "$RUNNER_TEMP/runner-ent.txt" || { echo "ERROR: Runner.app missing app group entitlement"; exit 1; }
+          for x in "$APP"/PlugIns/*.appex; do
+            echo "=== entitlements: $x ==="
+            ldid -e "$x" | tee "$RUNNER_TEMP/ext-ent.txt"
+            grep -q "$GROUP" "$RUNNER_TEMP/ext-ent.txt" || { echo "ERROR: $x missing app group entitlement"; exit 1; }
+          done
+          (cd ts && zip -qry "$GITHUB_WORKSPACE/clipboard-ios-trollstore.ipa" Payload)
+          ls -la "$GITHUB_WORKSPACE/clipboard-ios-trollstore.ipa"
+          unzip -l "$GITHUB_WORKSPACE/clipboard-ios-trollstore.ipa" | grep -q "Payload/Runner.app/PlugIns/ShareExtension.appex/" \
+            && echo "OK: TrollStore IPA embeds Share Extension" \
+            || { echo "ERROR: Share Extension missing from TrollStore IPA"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-trollstore
+          path: clipboard-ios-trollstore.ipa
     # 正式签名 IPA 需要 secrets：APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
     # APPLE_PROVISIONING_PROFILE, APPLE_TEAM_ID。本流水线只产出未签名制品。
 
@@ -131,9 +177,11 @@ jobs:
             ## 下载说明
             - **clipboard-android.apk** — Android 安装包（debug 签名，可直接侧载）
             - **clipboard-macos.zip** — macOS `.app`，**未签名/未公证**：右键「打开」，或 `xattr -cr clipboard_client.app`
-            - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；用 AltStore / Sideloadly / TrollStore 或自有证书重签。IPA 内已嵌入 Share Extension（PlugIns/ShareExtension.appex）
+            - **clipboard-ios-trollstore.ipa** — **TrollStore 专用**：已用 ldid 伪签并写入 App Group entitlement（主 App 与分享扩展均有），分享扩展可用
+            - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；供 AltStore / Sideloadly 或自有证书重签（免费 Apple ID 无 App Group，分享扩展会在面板里登录后直传）。IPA 内已嵌入 Share Extension（PlugIns/ShareExtension.appex）
             - 服务端镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`
           files: |
             dist/clipboard-macos.zip
             dist/clipboard-ios-unsigned.ipa
+            dist/clipboard-ios-trollstore.ipa
             dist/clipboard-android.apk

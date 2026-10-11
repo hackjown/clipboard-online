@@ -1,12 +1,15 @@
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/item.dart';
 import '../models/user.dart';
 import 'auth_store.dart';
+import 'share_config.dart';
 
 class ApiException implements Exception {
   ApiException(this.message, {this.status, this.method, this.url});
@@ -40,11 +43,14 @@ class ClipApi {
   Future<void> load() async {
     base = AuthStore.normalizeBaseUrl(await store.getBaseUrl());
     token = await store.getToken();
+    await _ensureDeviceId();
+    ShareConfig.sync(base, token); // iOS 分享扩展直接上传用（App Group 不可用时自动忽略）
   }
 
   /// 用输入框的值立即更新（并持久化）服务器地址，返回规范化结果
   Future<String> setBase(String input) async {
     base = await store.setBaseUrl(input);
+    ShareConfig.sync(base, token);
     return base;
   }
 
@@ -54,9 +60,51 @@ class ClipApi {
   /// 带 Bearer 的请求头（缩略图 / 视频 / 音频播放等需要）
   Map<String, String> get authHeaders => _authHeaders;
 
+  /// 本设备随机 ID（仅存本机）；随请求发送，服务端 Bark 推送据此「不推送本设备发出的内容」
+  String deviceId = '';
+
+  Future<void> _ensureDeviceId() async {
+    final sp = await SharedPreferences.getInstance();
+    var d = sp.getString('device_id');
+    if (d == null || d.isEmpty) {
+      final r = Random.secure();
+      d = List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      await sp.setString('device_id', d);
+    }
+    deviceId = d;
+  }
+
   Map<String, String> get _authHeaders => {
         if (token != null) 'Authorization': 'Bearer $token',
+        if (deviceId.isNotEmpty) 'X-Device-Id': deviceId,
       };
+
+  // ---- Bark 推送设置 ----
+  Future<({String url, bool skipThisDevice})> getBark() async {
+    final r = await http.get(_u('/api/settings/bark'), headers: _authHeaders);
+    final j = await _json(r);
+    return (
+      url: (j['bark_url'] ?? '').toString(),
+      skipThisDevice: deviceId.isNotEmpty && j['bark_exclude_device'] == deviceId,
+    );
+  }
+
+  Future<void> putBark(String url, {required bool skipThisDevice}) async {
+    final r = await http.put(_u('/api/settings/bark'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({
+          'bark_url': url.trim(),
+          'bark_exclude_device': skipThisDevice ? deviceId : '',
+        })));
+    await _json(r);
+  }
+
+  Future<void> testBark(String url) async {
+    final r = await http.post(_u('/api/settings/bark/test'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({'bark_url': url.trim()})));
+    await _json(r);
+  }
 
   Uri _u(String path, [Map<String, String>? q]) {
     final b = base.replaceAll(RegExp(r'/+$'), '');
@@ -91,6 +139,7 @@ class ClipApi {
     token = j['token'] as String?;
     final user = ClipUser.fromJson(j['user'] as Map<String, dynamic>);
     if (token != null) await store.saveSession(token: token!, username: user.username);
+    ShareConfig.sync(base, token);
     return user;
   }
 
@@ -105,6 +154,7 @@ class ClipApi {
     token = j['token'] as String?;
     final user = ClipUser.fromJson(j['user'] as Map<String, dynamic>);
     if (token != null) await store.saveSession(token: token!, username: user.username);
+    ShareConfig.sync(base, token);
     return user;
   }
 
@@ -114,6 +164,7 @@ class ClipApi {
     } catch (_) {}
     token = null;
     await store.clearSession();
+    ShareConfig.sync(base, null);
   }
 
   Future<ClipUser?> me() async {

@@ -54,6 +54,7 @@ CLIP_DATA_DIR=./data python tools/seed_demo.py   # 可选：灌示例数据（�
 | --- | --- | --- |
 | `CLIP_REGISTER` | 开 | `0` 关闭注册 |
 | `CLIP_MAX_UPLOAD_MB` | 200 | 单文件上限 |
+| `CLIP_BARK_ALLOW_PRIVATE` | 关 | `1` 允许 Bark 地址指向内网 / 本机（自建 Bark 用；默认为防 SSRF 而拒绝） |
 | `CLIP_MAX_TEXT_KB` | 1024 | 单条文本上限 |
 | `CLIP_DATA_DIR` | `./data` | users / items / user_meta / uploads |
 
@@ -80,3 +81,7 @@ pytest tests -v
 - 无邮箱验证 / 找回密码  
 - Markdown 为安全子集，非完整 CommonMark  
 - 分享链接知悉者可访问，勿分享真正机密  
+
+## Bark 推送
+
+每个用户可设置自己的 Bark 地址（`GET/PUT /api/settings/bark`，`POST /api/settings/bark/test`），其**私有**条目创建后异步推送到该地址（短超时，失败只记日志，不影响写入）。地址仅本人可读，不会出现在条目或其他用户数据里。写入请求可带 `X-Device-Id`，与设置里的 `bark_exclude_device` 相同则不推送。
