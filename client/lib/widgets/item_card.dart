@@ -17,6 +17,7 @@ class ItemCard extends StatelessWidget {
     required this.onPin,
     required this.onOpen,
     this.onReveal,
+    this.onEdit,
     this.imageUrl,
     this.headers,
   });
@@ -35,6 +36,9 @@ class ItemCard extends StatelessWidget {
 
   /// 打开预览 / 详情页
   final VoidCallback onOpen;
+
+  /// 编辑文本（仅所有者的文本条目）
+  final VoidCallback? onEdit;
 
   /// macOS：在访达中显示
   final VoidCallback? onReveal;
@@ -201,6 +205,8 @@ class ItemCard extends StatelessWidget {
                 InkButton(label: '复制', icon: Icons.copy_rounded, onPressed: onCopy)
               else
                 InkButton(label: '预览', icon: Icons.visibility_outlined, onPressed: onOpen),
+              if (onEdit != null && item.isText && item.mine)
+                InkButton(label: '编辑', icon: Icons.edit_outlined, onPressed: onEdit),
               if (onSystemShare != null)
                 InkButton(label: '分享', icon: Icons.ios_share, variant: InkVariant.ink, onPressed: onSystemShare),
               if (onReveal != null)

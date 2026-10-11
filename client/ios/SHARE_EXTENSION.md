@@ -63,3 +63,22 @@ IPA 内含 `Payload/Runner.app/PlugIns/ShareExtension.appex`（CI 校验，缺�
 根因：扩展有自己独立的 Info.plist，ATS 设置不继承主 App；而且 iOS 10+ 规定只要出现 `NSAllowsArbitraryLoadsForMedia` / `NSAllowsArbitraryLoadsInWebContent` / `NSAllowsLocalNetworking` 任一键，`NSAllowsArbitraryLoads` 就被忽略（Apple 文档 NSAllowsArbitraryLoads）。旧版本同时写了这些键，等于没开。
 
 修复：Runner 与 ShareExtension 的 Info.plist 只保留 `NSAllowsArbitraryLoads=true`。CI 用 `client/tool/verify_ats.sh` 解包 IPA 逐个检查（unsigned 与 TrollStore 两个 IPA）。注意：Dart 的 `dart:io` 不受 ATS 约束，所以主 App 之前「看起来正常」并不能说明 ATS 配置正确。
+
+
+## v0.1.8：传输层改为 NWConnection，以及如何读诊断
+
+v0.1.7 的 CI 已确认：最终 IPA 里 `ShareExtension.appex/Info.plist` 的 ATS 正确，但真机仍报 ATS 错误。**能证实的**：plist 内容没问题（unsigned 与 TrollStore 两个 IPA 都解包校验过）；ldid 只改签名，不改 Info.plist。**不能证实的**（没有真机）：为什么设备上的扩展进程仍然执行 ATS（候选：系统仍在用旧版扩展的注册信息 / TrollStore 更新后未刷新 PlugIn 缓存；扩展进程里 CFNetwork 对 ATS 的读取方式；与 iOS 26 SDK 相关的行为变化）。所以 v0.1.8 **绕开问题**：扩展不再使用 URLSession / CFNetwork，改用 `NWConnection`，ATS 不适用于它。
+
+### 看诊断
+发送失败时，分享面板的错误文字最后一行形如：
+
+```
+［诊断］扩展 v0.1.8(9) · bundle=com.clipboard.online.clipboardClient.ShareExtension · iOS 26.0 · App Group 可用 · 传输=NWConnection(TCP，不经过 URLSession/ATS) · 运行时 ATS 配置=NSAllowsArbitraryLoads=1,NSExceptionDomains=…
+```
+
+- **扩展 v…**：必须是 `0.1.8`。如果不是，说明系统还在用旧扩展——请在 TrollStore 里卸载旧 App、重启手机后重装。
+- **传输=NWConnection**：确认运行的是新传输层。
+- **运行时 ATS 配置**：扩展进程里 `Bundle.main.infoDictionary` 实际读到的 ATS 字典，用来判断设备上用的 Info.plist 是否就是我们打进 IPA 的那份。
+- **App Group**：可用 / 不可用（决定能否读主 App 的登录信息）。
+- 错误本体会精确说明原因：`连接失败：系统错误 61（Connection refused）`、`DNS 解析失败`、`连接超时（15 秒未能连上 host:port）`、`服务器返回 HTTP 4xx/5xx：…`。同一信息也写在扩展日志里（App Group 可用时在主 App「设置 → 分享扩展 → 扩展日志」）。
+- 首次使用 / 本地网络：iOS 可能弹出「本地网络」权限，需要允许。

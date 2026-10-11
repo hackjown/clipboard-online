@@ -20,6 +20,7 @@ import '../services/share_inbox.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 import '../widgets/item_card.dart';
+import 'edit_text_screen.dart';
 import 'media_preview_screen.dart';
 import 'quick_transfer_screen.dart';
 import 'share_sheet.dart';
@@ -610,6 +611,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               : null,
                           onShareLink: it.mine
                               ? () => showShareSheet(context, api: widget.api, item: it)
+                              : null,
+                          onEdit: it.mine && it.isText
+                              ? () async {
+                                  final saved = await Navigator.of(context).push<bool>(
+                                    MaterialPageRoute(builder: (_) => EditTextScreen(api: widget.api, item: it)),
+                                  );
+                                  if (saved == true) _refresh(silent: true);
+                                }
                               : null,
                           onSystemShare: () => _systemShare(it),
                           onReveal: (!kIsWeb && Platform.isMacOS && it.isFile && it.filename != null)

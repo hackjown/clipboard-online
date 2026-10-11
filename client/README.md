@@ -154,3 +154,10 @@ macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
 - **主题**：设置 → 外观主题（跟随系统 / 浅色 / 深色），保存在本地偏好（`theme_mode`）。
 - **压缩包预览**：zip/jar/apk/tar/tar.gz/tar.bz2/tar.xz 条目点「预览」显示目录树（文件夹可折叠、大小、解压后总大小），数据来自服务端 `/api/items/<uuid>/archive`，不下载也不解压；7z/rar 暂不支持（会提示）。
 - **ATS**：Info.plist 只保留 `NSAllowsArbitraryLoads`，见根目录 README。
+
+
+## v0.1.8 说明
+
+- 设置页显示「客户端版本 / 服务器版本」；请求遇到裸 404 会提示服务器版本过旧。
+- 文本卡片「编辑」（仅自己的文本）；其它设备经 WebSocket 同步。
+- iOS 分享扩展传输层改为 NWConnection，见 `ios/SHARE_EXTENSION.md`。

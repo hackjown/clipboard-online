@@ -473,6 +473,13 @@ class Store:
 # ---- Bark 推送（SSRF 防护：仅 http/https，默认拒绝内网 / 回环 / 链路本地地址）----
 log = logging.getLogger("clipboard.bark")
 
+try:
+    VERSION = (Path(__file__).parent / "VERSION").read_text().strip() or "dev"
+except OSError:  # pragma: no cover
+    VERSION = "dev"
+# 功能清单：客户端据此判断服务器是否过旧（旧镜像没有这些路由时会返回裸的 404 Not Found）
+FEATURES = ["bark", "archive", "edit", "preview", "share", "ws", "tags", "version"]
+
 
 def _ip_blocked(ip: str) -> bool:
     try:
@@ -501,6 +508,39 @@ def check_bark_url(raw: str, allow_private: bool) -> str:
         if not infos or any(_ip_blocked(i[4][0]) for i in infos):
             raise ValueError("出于安全考虑，不允许推送到内网 / 本机地址（自建 Bark 在内网请设置环境变量 CLIP_BARK_ALLOW_PRIVATE=1）")
     return u.rstrip("/") if not pu.query else u
+
+
+def bark_msg(r: "httpx.Response") -> str:
+    """提取 Bark 自己的错误文案（{"code":400,"message":"..."}），否则取响应前 120 字。"""
+    try:
+        j = r.json()
+        if isinstance(j, dict) and j.get("message"):
+            return str(j["message"])[:160]
+    except Exception:  # noqa: BLE001
+        pass
+    return (r.text or "")[:120]
+
+
+def bark_attempts(url: str, payload: dict) -> list[tuple[str, dict]]:
+    """把用户粘贴的各种形式规范成待尝试的 (目标URL, JSON)。
+    支持：https://api.day.app/KEY、…/KEY/、…/KEY/内容、自建服务器；末尾内容/查询串被忽略（推送内容由我们自己填）。"""
+    pu = urlparse(url)
+    base = f"{pu.scheme}://{pu.netloc}"
+    segs = [s for s in pu.path.split("/") if s]
+    if not segs:
+        return [(url, payload)]
+    key = segs[0]
+    out: list[tuple[str, dict]] = [(f"{base}/{key}", payload)]
+    if len(segs) > 1:  # 可能是带前缀的反代部署：…/prefix/KEY，也试原样地址
+        full = f"{base}/" + "/".join(segs)
+        out.append((full, payload))
+    out.append((f"{base}/push", {**payload, "device_key": key}))
+    seen, uniq = set(), []
+    for tgt, pl in out:
+        if tgt not in seen:
+            seen.add(tgt)
+            uniq.append((tgt, pl))
+    return uniq
 
 
 def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = None,
@@ -573,7 +613,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return None
 
     fails: dict[str, list[float]] = {}
-    app = FastAPI(title="Clipboard Online", version="2.0.0", docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
+    app = FastAPI(title="Clipboard Online", version=VERSION, docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json")
     app.state.store = store
     app.state.hub = hub
     app.state.bark_transport = None  # 测试注入 httpx.MockTransport
@@ -623,9 +663,14 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     def config(request: Request):
         u = current_user(request)
         return {"auth": True, "authed": u is not None, "user": u, "register": allow_reg,
+                "version": VERSION, "features": FEATURES,
                 "max_upload": max_upload, "max_text": max_text,
                 "expiry_presets": [{"sec": 0, "label": "不过期"}, {"sec": 3600, "label": "1 小时"},
                                    {"sec": 86400, "label": "24 小时"}, {"sec": 604800, "label": "7 天"}]}
+
+    @app.get("/api/version")
+    def api_version():
+        return {"version": VERSION, "features": FEATURES}
 
     @app.get("/api/me")
     def me(request: Request):
@@ -734,6 +779,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             "share_token": i.get("share_token") if (me and i.get("owner_id") == me["id"]) else None,
             "share_expires_at": i.get("share_expires_at") if (me and i.get("owner_id") == me["id"]) else None,
             "has_share": bool(i.get("share_token")),
+            "updated": i.get("updated"),
             "mime": i.get("mime") or (guess_mime(i.get("filename", "")) if i["type"] == "file" else "text/plain"),
             "is_image": False,
             "favorite": False, "pinned": False, "tags": [],
@@ -774,7 +820,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     bark_tasks: set = set()
 
     async def bark_send(url: str, title: str, body: str, open_url: Optional[str] = None) -> tuple[bool, str]:
-        """发送一次 Bark 推送（POST JSON）。返回 (成功, 说明)。短超时、不跟随重定向，发送前再次校验目的地。"""
+        """发送一次 Bark 推送。返回 (成功, 说明)。短超时、不跟随重定向，发送前再次校验目的地。
+        依次尝试：POST {base}/{key}（JSON），404 时再试 POST {base}/push（JSON，带 device_key）。"""
         try:
             url = await asyncio.to_thread(check_bark_url, url, bark_private)
         except ValueError as e:
@@ -782,13 +829,19 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         payload = {"title": title, "body": body, "group": "clipboard"}
         if open_url:
             payload["url"] = open_url
+        attempts = bark_attempts(url, payload)
+        last = "未发送"
         try:
             kw = {"transport": app.state.bark_transport} if getattr(app.state, "bark_transport", None) else {}
             async with httpx.AsyncClient(timeout=4.0, follow_redirects=False, **kw) as c:
-                r = await c.post(url, json=payload)
-            if 200 <= r.status_code < 300:
-                return True, "ok"
-            return False, f"Bark 服务器返回 HTTP {r.status_code}: {r.text[:120]}"
+                for target, pl in attempts:
+                    r = await c.post(target, json=pl)
+                    if 200 <= r.status_code < 300:
+                        return True, "ok"
+                    last = f"Bark 服务器返回 HTTP {r.status_code}：{bark_msg(r)}"
+                    if r.status_code != 404:
+                        break  # 非 404：Bark 自己的错误（如 key 无效），直接展示
+            return False, last
         except Exception as e:  # noqa: BLE001
             return False, f"请求 Bark 失败：{type(e).__name__}: {e}"[:200]
 
@@ -1106,6 +1159,72 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return serve_file(path, filename, item.get("mime"), bool(inline))
 
     # ---- share ----
+    @app.patch("/api/items/{uid}")
+    async def edit_item(request: Request, uid: str):
+        """编辑文本条目（仅所有者）：content / visibility / expires_in / tags；保留分享令牌。"""
+        me = require_user(request)
+        item = store.get_item(uid)
+        if not item:
+            raise HTTPException(404, "条目不存在或已过期")
+        if item.get("owner_id") != me["id"]:
+            raise HTTPException(403, "只能编辑自己的内容")
+        if item.get("type") != "text":
+            raise HTTPException(400, "只有文本条目可以编辑")
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求格式错误")
+        fields: dict[str, Any] = {}
+        if "content" in body:
+            content = body["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise HTTPException(400, "内容不能为空")
+            size = len(content.encode("utf-8"))
+            if size > max_text:
+                raise HTTPException(413, f"文本超过 {max_text // 1024} KB 限制")
+            fields["content"] = content
+            fields["size"] = size
+        vis = item.get("visibility", "private")
+        if "visibility" in body:
+            vis = parse_visibility(body.get("visibility"))
+            fields["visibility"] = vis
+        if "expires_in" in body:
+            fields["expires_at"] = parse_expires(body.get("expires_in"), vis)
+        elif vis != item.get("visibility"):
+            fields["expires_at"] = parse_expires(-1, vis)  # 换可见性且没指定：用新可见性的默认过期
+        if "tags" in body:
+            tags = body["tags"]
+            if not isinstance(tags, list):
+                raise HTTPException(400, "tags 须为数组")
+            clean: list[str] = []
+            for tg in tags:
+                s = str(tg).strip()[:32]
+                if s and s not in clean:
+                    clean.append(s)
+                if len(clean) >= 8:
+                    break
+            meta = store.get_meta(me["id"])
+            if clean:
+                meta["tags"][uid] = clean
+            else:
+                meta["tags"].pop(uid, None)
+            store.save_meta(me["id"], meta)
+        if not fields and "tags" not in body:
+            raise HTTPException(400, "没有可更新的字段")
+        fields["updated"] = time.time()
+        old_vis = item.get("visibility")
+        new = store.update_item(uid, **fields)
+        if new is None:
+            raise HTTPException(404, "条目不存在或已过期")
+        # 可见性变化：公共↔私有订阅者都要刷新
+        if old_vis != new.get("visibility"):
+            await emit("update", new, visibility=old_vis)
+        await emit("update", new)
+        meta = store.get_meta(me["id"])
+        return {"ok": True, "item": public_item(new, me, meta)}
+
     @app.post("/api/items/{uid}/share")
     async def create_share(request: Request, uid: str):
         me = require_user(request)

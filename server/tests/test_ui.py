@@ -166,3 +166,26 @@ def test_file_input_has_no_accept_and_archive_viewer(page, server):
     assert page.evaluate("window.__xss") is None
     page.keyboard.press("Escape")
     assert page.locator(".pv").count() == 0
+
+
+def test_edit_text_via_ui(page, server):
+    page.evaluate("window.__clip.openAuth('register')")
+    page.wait_for_selector("#authUser")
+    page.fill("#authUser", "edituser")
+    page.fill("#authPw", "demo1234")
+    page.click(".auth-form button[type=submit]")
+    page.wait_for_function("() => window.__clip.state.user && window.__clip.state.user.username === 'edituser'")
+    page.evaluate("""async () => {
+      await fetch('/content',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({content:'旧内容',visibility:'private'})});
+      await window.__clip.refreshScoped();
+    }""")
+    page.evaluate("window.__clip.setScope('private', {force:true})")
+    page.wait_for_selector(".card--text")
+    page.click(".card--text .btn--edit")
+    page.wait_for_selector(".edit-ta")
+    assert page.input_value(".edit-ta") == "旧内容"
+    page.fill(".edit-ta", "新内容 v2")
+    page.press(".edit-ta", "Control+Enter")
+    page.wait_for_function("() => document.body.innerText.includes('新内容 v2')")
+    assert "旧内容" not in page.inner_text(".card--text")

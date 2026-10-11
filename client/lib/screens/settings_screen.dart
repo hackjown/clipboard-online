@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../app_info.dart';
 import '../services/api.dart';
 import '../services/auth_store.dart';
 import '../services/menubar.dart';
@@ -68,7 +69,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.store.getBaseUrl().then((b) => setState(() => _base.text = b));
     if (ShareConfig.supported) _loadShare();
     _loadBark();
+    widget.api.fetchServerVersion().then((_) {
+      if (mounted) setState(() => _verLoaded = true);
+    });
   }
+
+  bool _verLoaded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -114,6 +120,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
               selected: {m},
               onSelectionChanged: (s) => ThemeController.instance.set(s.first),
+            ),
+          ),
+          const Divider(height: 32),
+          ListTile(
+            title: const Text('版本'),
+            subtitle: Text(
+              '客户端 $kClientVersion\n'
+              '服务器 ${!_verLoaded ? '读取中…' : (widget.api.serverVersion ?? '未知（早于 0.1.8，缺少 /api/version）')}'
+              '${_verLoaded && widget.api.serverVersion == null ? '\n服务器版本过旧，请更新 Docker 镜像（Bark / 压缩包预览 / 文本编辑等功能需要新版服务器）' : ''}',
             ),
           ),
           const Divider(height: 32),

@@ -294,3 +294,12 @@ class ClipApi {
 ```
 
 完整字段以 `/openapi.json` 为准。更多产品规划见 [CLIENT_ROADMAP.md](./CLIENT_ROADMAP.md)。
+
+
+### 版本与功能（v0.1.8）
+
+`GET /api/version` → `{"version":"0.1.8","features":["bark","archive","edit",...]}`；同样的 `version` / `features` 也在 `GET /api/config` 里。旧版服务器没有这些字段 / 路由，路由缺失时返回裸 `404 {"detail":"Not Found"}`。
+
+### 编辑文本（v0.1.8）
+
+`PATCH /api/items/{uuid}`，JSON：`content`（非空，≤ 文本上限）、可选 `visibility`、`expires_in`（秒，0 不过期）、`tags`（数组）。仅所有者：未登录 401，非所有者 403，不存在/已过期 404，非文本 400，超限 413。成功返回 `{ok:true,item:{...}}`，条目 `updated` 为更新时间，`share_token` 不变，并广播 WebSocket `update`。

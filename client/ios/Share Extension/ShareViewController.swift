@@ -1,5 +1,6 @@
 import UIKit
 import UniformTypeIdentifiers
+import Network
 
 // 分享扩展 v2：不再依赖「App Group + 跳回主 App」。
 // 扩展自己读取分享内容，并直接用 Bearer 令牌上传到服务器（私有区），界面里显示进度 / 结果 / 精确错误文本。
@@ -86,6 +87,360 @@ private enum ShareStore {
     }
 }
 
+
+// MARK: - 极简 HTTP/1.1 客户端（Network.framework / NWConnection）
+//
+// 为什么不用 URLSession：URLSession / CFNetwork 会对明文 http 执行 ATS（App Transport Security）。
+// 在 TrollStore / 侧载环境里，分享扩展进程的 ATS 配置是否生效无法在真机之外验证；
+// NWConnection 是纯 TCP/TLS，不经过 CFNetwork，因此 ATS 根本不会介入。
+// 功能：JSON / multipart 请求体（文件分块流式读取）、进度、取消、超时、Content-Length 与 chunked 响应、不跟随重定向。
+
+private enum HTTPSegment {
+    case data(Data)
+    case file(URL)
+}
+
+private struct MiniHTTPError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+private struct MiniHTTPResponse {
+    var status: Int
+    var reason: String
+    var headers: [String: String]   // 键小写
+    var body: Data
+}
+
+private func describeNWError(_ e: NWError) -> String {
+    switch e {
+    case .posix(let c):
+        return "系统错误 \(c.rawValue)（\(String(cString: strerror(c.rawValue)))）"
+    case .dns(let c):
+        return "DNS 解析失败（\(c)）"
+    case .tls(let s):
+        return "TLS 错误（OSStatus \(s)）"
+    default:
+        return "\(e)"
+    }
+}
+
+private final class MiniHTTPClient {
+    private let url: URL
+    private let method: String
+    private let headers: [String: String]
+    private let segments: [HTTPSegment]
+    private let connectTimeout: TimeInterval
+    private let idleTimeout: TimeInterval
+    private let onProgress: ((Int64, Int64) -> Void)?
+    private var completion: ((Result<MiniHTTPResponse, MiniHTTPError>) -> Void)?
+
+    private let q = DispatchQueue(label: "clip.minihttp")
+    private var conn: NWConnection?
+    private var timer: DispatchWorkItem?
+    private var finished = false
+    private var connected = false
+    private var lastWaiting: String?
+
+    // 发送状态
+    private var segIndex = 0
+    private var segOffset = 0
+    private var fileHandle: FileHandle?
+    private var totalBody: Int64 = 0
+    private var sentBody: Int64 = 0
+    private var sendError: String?
+    private var sendDone = false
+
+    // 接收状态
+    private var buf = Data()
+    private var headParsed = false
+    private var status = 0
+    private var reason = ""
+    private var respHeaders: [String: String] = [:]
+    private var contentLength: Int?
+    private var chunked = false
+    private var bodyOut = Data()
+    private let maxBody = 2 * 1024 * 1024
+
+    init(url: URL, method: String, headers: [String: String], body: [HTTPSegment],
+         connectTimeout: TimeInterval = 15, idleTimeout: TimeInterval = 60,
+         onProgress: ((Int64, Int64) -> Void)? = nil,
+         completion: @escaping (Result<MiniHTTPResponse, MiniHTTPError>) -> Void) {
+        self.url = url
+        self.method = method
+        self.headers = headers
+        self.segments = body
+        self.connectTimeout = connectTimeout
+        self.idleTimeout = idleTimeout
+        self.onProgress = onProgress
+        self.completion = completion
+        var n: Int64 = 0
+        for s in body {
+            switch s {
+            case .data(let d): n += Int64(d.count)
+            case .file(let u):
+                n += (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? NSNumber)?.int64Value ?? 0
+            }
+        }
+        self.totalBody = n
+    }
+
+    var transportName: String { url.scheme?.lowercased() == "https" ? "NWConnection(TCP+TLS)" : "NWConnection(TCP)" }
+
+    func start() {
+        q.async { self.begin() }
+    }
+
+    func cancel() {
+        q.async { self.finish(.failure(MiniHTTPError(message: "已取消"))) }
+    }
+
+    private func begin() {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else {
+            finish(.failure(MiniHTTPError(message: "服务器地址无效：\(url.absoluteString)")))
+            return
+        }
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(truncatingIfNeeded: port)), port > 0, port < 65536 else {
+            finish(.failure(MiniHTTPError(message: "端口无效：\(port)")))
+            return
+        }
+        let params: NWParameters = scheme == "https" ? .tls : .tcp
+        let c = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
+        conn = c
+        armTimer(connectTimeout, "连接超时（\(Int(connectTimeout)) 秒未能连上 \(host):\(port)）")
+        c.stateUpdateHandler = { [weak self] st in
+            guard let self = self else { return }
+            switch st {
+            case .ready:
+                if !self.connected {
+                    self.connected = true
+                    self.armTimer(self.idleTimeout, "等待服务器响应超时（\(Int(self.idleTimeout)) 秒无数据）")
+                    self.receiveLoop()
+                    self.sendHead()
+                }
+            case .waiting(let err):
+                // 无网络 / 路由不可达 / DNS 暂时失败：保持等待，由超时给出最终原因
+                self.lastWaiting = describeNWError(err)
+            case .failed(let err):
+                self.finish(.failure(MiniHTTPError(message: "连接失败：\(describeNWError(err))（\(host):\(port)）")))
+            case .cancelled:
+                break
+            default:
+                break
+            }
+        }
+        c.start(queue: q)
+    }
+
+    private func armTimer(_ secs: TimeInterval, _ msg: String) {
+        timer?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.finished else { return }
+            var m = msg
+            if !self.connected, let w = self.lastWaiting { m += "；最近状态：\(w)" }
+            self.finish(.failure(MiniHTTPError(message: m)))
+        }
+        timer = w
+        q.asyncAfter(deadline: .now() + secs, execute: w)
+    }
+
+    private func touch() {
+        if connected && !finished { armTimer(idleTimeout, "等待服务器响应超时（\(Int(idleTimeout)) 秒无数据）") }
+    }
+
+    // MARK: 发送
+    private func sendHead() {
+        var path = url.path.isEmpty ? "/" : url.path
+        if let qs = url.query { path += "?" + qs }
+        let scheme = url.scheme?.lowercased() ?? "http"
+        let defPort = scheme == "https" ? 443 : 80
+        var hostHeader = url.host ?? ""
+        if hostHeader.contains(":") { hostHeader = "[" + hostHeader + "]" }
+        if let p = url.port, p != defPort { hostHeader += ":\(p)" }
+        var h = "\(method) \(path) HTTP/1.1\r\nHost: \(hostHeader)\r\nConnection: close\r\nAccept: application/json\r\nUser-Agent: ClipboardShareExt\r\n"
+        for (k, v) in headers { h += "\(k): \(v)\r\n" }
+        h += "Content-Length: \(totalBody)\r\n\r\n"
+        conn?.send(content: h.data(using: .utf8), completion: .contentProcessed { [weak self] err in
+            guard let self = self else { return }
+            if let err = err {
+                self.sendError = "发送请求头失败：\(describeNWError(err))"
+                return
+            }
+            self.pump()
+        })
+    }
+
+    private func nextChunk() -> Data? {
+        let maxLen = 256 * 1024
+        while segIndex < segments.count {
+            switch segments[segIndex] {
+            case .data(let d):
+                if segOffset >= d.count { segIndex += 1; segOffset = 0; continue }
+                let end = min(d.count, segOffset + maxLen)
+                let out = d.subdata(in: segOffset..<end)
+                segOffset = end
+                return out
+            case .file(let u):
+                if fileHandle == nil { fileHandle = try? FileHandle(forReadingFrom: u) }
+                guard let h = fileHandle else {
+                    sendError = "无法读取文件：\(u.lastPathComponent)"
+                    return nil
+                }
+                let d = h.readData(ofLength: maxLen)
+                if d.isEmpty {
+                    try? h.close(); fileHandle = nil
+                    segIndex += 1; segOffset = 0
+                    continue
+                }
+                return d
+            }
+        }
+        return nil
+    }
+
+    private func pump() {
+        if finished || sendError != nil { return }
+        guard let chunk = nextChunk() else {
+            sendDone = true
+            return
+        }
+        conn?.send(content: chunk, completion: .contentProcessed { [weak self] err in
+            guard let self = self, !self.finished else { return }
+            if let err = err {
+                // 服务器可能已提前回复并关闭（如 413）：先记下，等接收端给出真正的响应
+                self.sendError = "上传中断：\(describeNWError(err))"
+                return
+            }
+            self.sentBody += Int64(chunk.count)
+            self.touch()
+            if let cb = self.onProgress, self.totalBody > 0 {
+                let s = self.sentBody, t = self.totalBody
+                DispatchQueue.main.async { cb(s, t) }
+            }
+            self.pump()
+        })
+    }
+
+    // MARK: 接收
+    private func receiveLoop() {
+        conn?.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, err in
+            guard let self = self, !self.finished else { return }
+            if let d = data, !d.isEmpty {
+                self.buf.append(d)
+                self.touch()
+                if let r = self.parse() {
+                    self.finish(.success(r))
+                    return
+                }
+            }
+            if let err = err {
+                if let r = self.parseAtEOF() { self.finish(.success(r)); return }
+                let extra = self.sendError.map { "；\($0)" } ?? ""
+                self.finish(.failure(MiniHTTPError(message: "读取响应失败：\(describeNWError(err))\(extra)")))
+                return
+            }
+            if isComplete {
+                if let r = self.parseAtEOF() { self.finish(.success(r)); return }
+                let extra = self.sendError.map { "；\($0)" } ?? ""
+                let why = self.headParsed ? "响应不完整" : "服务器未返回任何 HTTP 响应"
+                self.finish(.failure(MiniHTTPError(message: "连接被服务器关闭：\(why)\(extra)")))
+                return
+            }
+            self.receiveLoop()
+        }
+    }
+
+    /// 解析缓冲区；响应完整时返回
+    private func parse() -> MiniHTTPResponse? {
+        while true {
+            if !headParsed {
+                guard let r = buf.range(of: Data("\r\n\r\n".utf8)) else {
+                    if buf.count > 64 * 1024 { return MiniHTTPResponse(status: 0, reason: "响应头过大", headers: [:], body: Data()) }
+                    return nil
+                }
+                let head = String(data: buf.subdata(in: 0..<r.lowerBound), encoding: .isoLatin1) ?? ""
+                buf.removeSubrange(0..<r.upperBound)
+                var lines = head.components(separatedBy: "\r\n")
+                let first = lines.removeFirst()
+                let parts = first.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+                guard parts.count >= 2, parts[0].hasPrefix("HTTP/"), let code = Int(parts[1]) else {
+                    return MiniHTTPResponse(status: 0, reason: "非法状态行：\(first.prefix(80))", headers: [:], body: Data())
+                }
+                status = code
+                reason = parts.count > 2 ? String(parts[2]) : ""
+                respHeaders = [:]
+                for l in lines {
+                    guard let i = l.firstIndex(of: ":") else { continue }
+                    let k = l[l.startIndex..<i].trimmingCharacters(in: .whitespaces).lowercased()
+                    let v = l[l.index(after: i)...].trimmingCharacters(in: .whitespaces)
+                    respHeaders[k] = v
+                }
+                if code >= 100 && code < 200 { continue }   // 1xx 临时响应：忽略，继续读真正的响应头
+                headParsed = true
+                chunked = (respHeaders["transfer-encoding"] ?? "").lowercased().contains("chunked")
+                contentLength = respHeaders["content-length"].flatMap { Int($0) }
+                if method == "HEAD" || code == 204 || code == 304 { contentLength = 0; chunked = false }
+            }
+            break
+        }
+        if chunked {
+            while true {
+                guard let le = buf.range(of: Data("\r\n".utf8)) else { return nil }
+                let line = String(data: buf.subdata(in: 0..<le.lowerBound), encoding: .isoLatin1) ?? ""
+                let hex = line.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+                guard let size = Int(hex, radix: 16), size >= 0 else {
+                    return MiniHTTPResponse(status: 0, reason: "非法 chunk 长度：\(hex.prefix(20))", headers: [:], body: Data())
+                }
+                if size == 0 { return makeResponse() }
+                let need = le.upperBound + size + 2
+                if buf.count < need { return nil }
+                bodyOut.append(buf.subdata(in: le.upperBound..<(le.upperBound + size)))
+                buf.removeSubrange(0..<need)
+                if bodyOut.count > maxBody { return makeResponse() }
+            }
+        }
+        if let cl = contentLength {
+            if buf.count >= cl || cl > maxBody && buf.count >= maxBody {
+                bodyOut = buf.prefix(min(cl, maxBody))
+                return makeResponse()
+            }
+            return nil
+        }
+        return nil   // 无长度：读到连接关闭
+    }
+
+    private func parseAtEOF() -> MiniHTTPResponse? {
+        guard headParsed else { return nil }
+        if chunked { return nil }
+        if contentLength == nil {
+            bodyOut = buf.prefix(maxBody)
+            return makeResponse()
+        }
+        return nil
+    }
+
+    private func makeResponse() -> MiniHTTPResponse {
+        return MiniHTTPResponse(status: status, reason: reason, headers: respHeaders, body: bodyOut)
+    }
+
+    private func finish(_ r: Result<MiniHTTPResponse, MiniHTTPError>) {
+        if finished { return }
+        finished = true
+        timer?.cancel()
+        timer = nil
+        conn?.stateUpdateHandler = nil
+        conn?.cancel()
+        conn = nil
+        try? fileHandle?.close()
+        fileHandle = nil
+        let cb = completion
+        completion = nil
+        DispatchQueue.main.async { cb?(r) }
+    }
+}
+
 private enum Payload {
     case file(url: URL, name: String, mime: String)
     case text(String)
@@ -99,7 +454,7 @@ private enum Payload {
 }
 
 @objc(ShareViewController)
-final class ShareViewController: UIViewController, URLSessionTaskDelegate {
+final class ShareViewController: UIViewController {
     // UI
     private let card = UIView()
     private let titleLabel = UILabel()
@@ -115,8 +470,7 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
 
     private var payloads: [Payload] = []
     private var config: ShareStore.Config?
-    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
-    private var currentTask: URLSessionTask?
+    private var currentClient: MiniHTTPClient?   // 传输层：NWConnection（不经过 URLSession / ATS）
     private var totalBytes: Int64 = 0
     private var doneBytes: Int64 = 0
     private var finished = false
@@ -128,7 +482,7 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
         super.viewDidLoad()
         try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
         buildUI()
-        ShareLog.write("启动 bundle=\(Bundle.main.bundleIdentifier ?? "?") group=\(ShareStore.groupContainer != nil ? "可用" : "不可用") ")
+        ShareLog.write("启动 " + diagnostics())
         setStatus("正在读取分享内容…", busy: true)
         collect { [weak self] items in
             guard let self = self else { return }
@@ -240,7 +594,7 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
     }
 
     @objc private func closeTapped() {
-        currentTask?.cancel()
+        currentClient?.cancel()
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
     }
 
@@ -363,35 +717,37 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
         }
         setStatus("正在登录 \(base) …", busy: true)
         primary.isHidden = true
-        var req = URLRequest(url: url, timeoutInterval: 20)
-        req.httpMethod = "POST"
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["username": user, "password": pass])
-        session.dataTask(with: req) { [weak self] data, resp, err in
+        let body = (try? JSONSerialization.data(withJSONObject: ["username": user, "password": pass])) ?? Data()
+        let client = MiniHTTPClient(url: url, method: "POST",
+                                    headers: ["Content-Type": "application/json; charset=utf-8"],
+                                    body: [.data(body)], connectTimeout: 15, idleTimeout: 30) { [weak self] result in
             guard let self = self else { return }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if let err = err {
-                ShareLog.write("登录失败: \(err.localizedDescription)")
-                self.showLogin(message: "无法连接 \(base)：\(err.localizedDescription)")
-                self.setStatus("无法连接 \(base)：\(err.localizedDescription)", error: true)
-                return
-            }
-            let obj = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
-            guard code == 200, let token = obj?["token"] as? String else {
-                let msg = (obj?["error"] as? String) ?? (obj?["detail"] as? String) ?? String(data: data ?? Data(), encoding: .utf8) ?? ""
-                ShareLog.write("登录被拒 HTTP \(code): \(msg)")
+            switch result {
+            case .failure(let err):
+                ShareLog.write("登录失败: \(err.message)")
                 self.showLogin(message: "")
-                self.setStatus("登录失败（HTTP \(code)）：\(msg)\nPOST \(base)/api/login", error: true)
-                return
+                self.setStatus("无法连接 \(base)：\(err.message)\n\(self.diagnostics())", error: true)
+            case .success(let resp):
+                let code = resp.status
+                let obj = (try? JSONSerialization.jsonObject(with: resp.body)) as? [String: Any]
+                guard code == 200, let token = obj?["token"] as? String else {
+                    let msg = (obj?["error"] as? String) ?? (obj?["detail"] as? String) ?? String(data: resp.body.prefix(300), encoding: .utf8) ?? ""
+                    ShareLog.write("登录被拒 HTTP \(code): \(msg)")
+                    self.showLogin(message: "")
+                    self.setStatus("登录失败（HTTP \(code)）：\(msg)\nPOST \(base)/api/login\n\(self.diagnostics())", error: true)
+                    return
+                }
+                UserDefaults.standard.set(user, forKey: "ext_user")
+                let c = ShareStore.Config(base: base, token: token)
+                ShareStore.saveLocal(c)
+                self.config = c
+                ShareLog.write("登录成功 \(base) 用户 \(user)")
+                self.form.isHidden = true
+                self.upload()
             }
-            UserDefaults.standard.set(user, forKey: "ext_user")
-            let c = ShareStore.Config(base: base, token: token)
-            ShareStore.saveLocal(c)
-            self.config = c
-            ShareLog.write("登录成功 \(base) 用户 \(user)")
-            self.form.isHidden = true
-            self.upload()
-        }.resume()
+        }
+        currentClient = client
+        client.start()
     }
 
     // MARK: 上传
@@ -445,19 +801,23 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
         var errorDescription: String? { message }
     }
 
-    private func finish(_ data: Data?, _ resp: URLResponse?, _ err: Error?, _ what: String, _ url: URL, _ done: @escaping (Result<Void, Error>) -> Void) {
-        if let err = err {
-            done(.failure(UploadError(message: "网络错误：\(err.localizedDescription)\n\(what) \(url.absoluteString)", status: 0)))
-            return
-        }
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        let body = String(data: data ?? Data(), encoding: .utf8) ?? ""
-        let obj = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
-        if (200..<300).contains(code), (obj?["ok"] as? Bool) != false {
-            done(.success(()))
-        } else {
-            let msg = (obj?["error"] as? String) ?? (obj?["detail"] as? String) ?? String(body.prefix(300))
-            done(.failure(UploadError(message: "服务器返回 HTTP \(code)：\(msg)\n\(what) \(url.absoluteString)", status: code)))
+    private func finish(_ result: Result<MiniHTTPResponse, MiniHTTPError>, _ what: String, _ url: URL, _ done: @escaping (Result<Void, Error>) -> Void) {
+        switch result {
+        case .failure(let err):
+            done(.failure(UploadError(message: "网络错误：\(err.message)\n\(what) \(url.absoluteString)", status: 0)))
+        case .success(let resp):
+            let code = resp.status
+            let body = String(data: resp.body, encoding: .utf8) ?? ""
+            let obj = (try? JSONSerialization.jsonObject(with: resp.body)) as? [String: Any]
+            if (200..<300).contains(code), (obj?["ok"] as? Bool) != false {
+                done(.success(()))
+            } else {
+                var msg = (obj?["error"] as? String) ?? (obj?["detail"] as? String) ?? String(body.prefix(300))
+                if code == 404 && (obj?["detail"] as? String) == "Not Found" {
+                    msg = "服务器版本过旧或地址有误（该接口不存在）。请更新服务器 Docker 镜像。"
+                }
+                done(.failure(UploadError(message: "服务器返回 HTTP \(code)：\(msg)\n\(what) \(url.absoluteString)", status: code)))
+            }
         }
     }
 
@@ -466,15 +826,16 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
             done(.failure(UploadError(message: "服务器地址无效：\(cfg.base)", status: 0)))
             return
         }
-        var req = URLRequest(url: url, timeoutInterval: 30)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(cfg.token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["content": text, "visibility": "private", "expires_in": 0])
-        currentTask = session.dataTask(with: req) { [weak self] d, r, e in
-            self?.finish(d, r, e, "POST", url, done)
+        let body = (try? JSONSerialization.data(withJSONObject: ["content": text, "visibility": "private", "expires_in": 0])) ?? Data()
+        let client = MiniHTTPClient(url: url, method: "POST",
+                                    headers: ["Authorization": "Bearer \(cfg.token)",
+                                              "Content-Type": "application/json; charset=utf-8",
+                                              "X-Device-Id": deviceId()],
+                                    body: [.data(body)], connectTimeout: 15, idleTimeout: 30) { [weak self] r in
+            self?.finish(r, "POST", url, done)
         }
-        currentTask?.resume()
+        currentClient = client
+        client.start()
     }
 
     private func sendFile(url src: URL, name: String, mime: String, cfg: ShareStore.Config, done: @escaping (Result<Void, Error>) -> Void) {
@@ -483,42 +844,50 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
             return
         }
         let boundary = "ClipBoundary" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let bodyURL = workDir.appendingPathComponent("body_" + UUID().uuidString)
-        do {
-            FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
-            let out = try FileHandle(forWritingTo: bodyURL)
-            func w(_ s: String) { out.write(s.data(using: .utf8) ?? Data()) }
-            w("--\(boundary)\r\nContent-Disposition: form-data; name=\"visibility\"\r\n\r\nprivate\r\n")
-            w("--\(boundary)\r\nContent-Disposition: form-data; name=\"expires_in\"\r\n\r\n0\r\n")
-            let safeName = name.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
-            w("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mime)\r\n\r\n")
-            let inp = try FileHandle(forReadingFrom: src)
-            while true {
-                let chunk = inp.readData(ofLength: 1 << 20)
-                if chunk.isEmpty { break }
-                out.write(chunk)
-            }
-            try? inp.close()
-            w("\r\n--\(boundary)--\r\n")
-            try? out.close()
-        } catch {
-            done(.failure(UploadError(message: "准备上传数据失败：\(error.localizedDescription)", status: 0)))
-            return
+        func s(_ x: String) -> Data { return x.data(using: .utf8) ?? Data() }
+        let safeName = name.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+        var pre = Data()
+        pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"visibility\"\r\n\r\nprivate\r\n"))
+        pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"expires_in\"\r\n\r\n0\r\n"))
+        pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mime)\r\n\r\n"))
+        let post = s("\r\n--\(boundary)--\r\n")
+        // 文件按 256KB 分块从磁盘流式发送，不会整体读入内存
+        let client = MiniHTTPClient(url: url, method: "POST",
+                                    headers: ["Authorization": "Bearer \(cfg.token)",
+                                              "Content-Type": "multipart/form-data; boundary=\(boundary)",
+                                              "X-Device-Id": deviceId()],
+                                    body: [.data(pre), .file(src), .data(post)],
+                                    connectTimeout: 15, idleTimeout: 120,
+                                    onProgress: { [weak self] sent, total in
+                                        guard total > 0 else { return }
+                                        self?.progress.progress = Float(sent) / Float(total)
+                                    }) { [weak self] r in
+            self?.finish(r, "POST", url, done)
         }
-        var req = URLRequest(url: url, timeoutInterval: 600)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(cfg.token)", forHTTPHeaderField: "Authorization")
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        currentTask = session.uploadTask(with: req, fromFile: bodyURL) { [weak self] d, r, e in
-            try? FileManager.default.removeItem(at: bodyURL)
-            self?.finish(d, r, e, "POST", url, done)
-        }
-        currentTask?.resume()
+        currentClient = client
+        client.start()
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-        guard totalBytesExpectedToSend > 0 else { return }
-        progress.progress = Float(totalBytesSent) / Float(totalBytesExpectedToSend)
+    // MARK: 诊断信息（出现在错误对话框与日志里）
+    private func deviceId() -> String {
+        let d = UserDefaults.standard
+        if let v = d.string(forKey: "ext_device_id"), !v.isEmpty { return v }
+        let v = "ext-" + UUID().uuidString.lowercased()
+        d.set(v, forKey: "ext_device_id")
+        return v
+    }
+
+    private func diagnostics() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let ver = (info["CFBundleShortVersionString"] as? String ?? "?") + "(" + (info["CFBundleVersion"] as? String ?? "?") + ")"
+        let ats: String
+        if let a = info["NSAppTransportSecurity"] as? [String: Any] {
+            ats = a.keys.sorted().map { "\($0)=\(a[$0] ?? "")" }.joined(separator: ",")
+        } else {
+            ats = "无"
+        }
+        let group = ShareStore.groupContainer != nil ? "可用" : "不可用"
+        return "［诊断］扩展 v\(ver) · bundle=\(Bundle.main.bundleIdentifier ?? "?") · iOS \(UIDevice.current.systemVersion) · App Group \(group) · 传输=NWConnection(TCP，不经过 URLSession/ATS) · 运行时 ATS 配置=\(ats)"
     }
 
     private func handleFailure(_ e: Error) {
@@ -537,7 +906,9 @@ final class ShareViewController: UIViewController, URLSessionTaskDelegate {
 
     private func fail(_ message: String) {
         progress.isHidden = true
-        setStatus("发送失败：\(message)", busy: false, error: true)
+        let diag = diagnostics()
+        ShareLog.write("失败诊断 " + diag)
+        setStatus("发送失败：\(message)\n\(diag)", busy: false, error: true)
         if !payloads.isEmpty { showPrimary("重试", mode: "retry") }
         secondary.setTitle("关闭", for: .normal)
     }

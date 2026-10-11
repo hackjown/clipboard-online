@@ -15,6 +15,8 @@ fail=0
 check() {
   local plist="$1"
   echo "=== $plist"
+  plutil -lint "$plist" || { echo "ERROR: plist 格式无效"; fail=1; }
+  echo "--- 运行时会读到的 NSAppTransportSecurity："
   $PB -c "Print :NSAppTransportSecurity" "$plist" || { echo "ERROR: 没有 NSAppTransportSecurity"; fail=1; return; }
   local v; v="$($PB -c "Print :NSAppTransportSecurity:NSAllowsArbitraryLoads" "$plist" 2>/dev/null || echo missing)"
   [ "$v" = "true" ] || { echo "ERROR: NSAllowsArbitraryLoads=$v（应为 true）"; fail=1; }
@@ -25,6 +27,13 @@ check() {
   done
 }
 if [ -f "$app/Info.plist" ]; then check "$app/Info.plist"; else check "$app/Contents/Info.plist"; fi
-for x in "$app"/PlugIns/*.appex; do [ -d "$x" ] && check "$x/Info.plist"; done
+for x in "$app"/PlugIns/*.appex; do
+  [ -d "$x" ] || continue
+  check "$x/Info.plist"
+  exe="$x/$($PB -c "Print :CFBundleExecutable" "$x/Info.plist")"
+  echo "--- $exe 链接的库："; otool -L "$exe" | grep -E "Network|Foundation" || true
+  if strings "$exe" | grep -q "NWConnection"; then echo "OK: 扩展使用 NWConnection 传输"; else echo "ERROR: 扩展二进制里没有 NWConnection（传输层不是 Network.framework）"; fail=1; fi
+  if strings "$exe" | grep -q "URLSessionTaskDelegate\|uploadTask"; then echo "WARN: 扩展二进制仍引用 URLSession 上传相关符号"; fi
+done
 [ -n "$work" ] && rm -rf "$work"
 [ $fail -eq 0 ] && echo "OK: ATS 配置正确" || { echo "ATS 校验失败"; exit 1; }

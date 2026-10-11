@@ -223,7 +223,15 @@
     if (opt.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opt.body); }
     const r = await fetch(path, init);
     let data = null; try { data = await r.json(); } catch (_) {}
-    if (!r.ok) throw new Error((data && (data.error || data.detail)) || `请求失败 (${r.status})`);
+    if (!r.ok) {
+      const msg = data && (data.error || data.detail);
+      // 旧版服务器缺少路由时返回裸的 "Not Found"：给出明确提示
+      if (r.status === 404 && msg === 'Not Found') {
+        const v = state.cfg && state.cfg.version;
+        throw new Error(`服务器版本过旧（${v || '早于 0.1.8'}），请更新 Docker 镜像`);
+      }
+      throw new Error(msg || `请求失败 (${r.status})`);
+    }
     return data;
   }
 
@@ -312,6 +320,7 @@
 
     const actions = h('div', { class: 'actions wrap' });
     if (it.mine) {
+      if (it.type === 'text') actions.append(h('button', { type: 'button', class: 'btn sm btn--edit', onclick: () => openEdit(it) }, h('span', { text: '编辑' })));
       actions.append(h('button', { type: 'button', class: 'btn btn--del sm', onclick: () => confirmDelete(it) }, icon('trash'), h('span', { text: '删除' })));
     }
 
@@ -425,7 +434,7 @@
     const live = () => Array.from(list.children).filter((e) => !e.classList.contains('leaving'));
     vis.forEach((it, idx) => {
       let c = cache.get(it.uuid);
-      const sig = [it.mine, it.favorite, it.pinned, (it.tags || []).join(','), it.expires_at, it.has_share].join('|');
+      const sig = [it.mine, it.favorite, it.pinned, (it.tags || []).join(','), it.expires_at, it.has_share, it.updated, it.size, it.visibility].join('|');
       if (!c) {
         c = makeCard(it); c._sig = sig; cache.set(it.uuid, c);
         c.el.classList.add('enter');
@@ -884,6 +893,37 @@
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '关闭'))));
   }
 
+  function openEdit(it) {
+    const ta = h('textarea', { class: 'edit-ta', rows: '8', maxlength: String(state.cfg.max_text || 1048576), 'aria-label': '编辑文本' });
+    ta.value = it.content || '';
+    ta.style.cssText = 'width:100%;min-height:180px;border:var(--line);border-radius:12px;padding:12px;background:var(--paper-2);font-size:16px;line-height:1.5;resize:vertical;color:var(--ink)';
+    const err = h('p', { class: 'form-err', hidden: true });
+    const save = h('button', { type: 'button', class: 'btn btn--accent' }, icon('check'), h('span', { text: '保存' }));
+    const cancel = h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消');
+    const doSave = async (force) => {
+      const v = ta.value;
+      if (!v.trim()) { err.textContent = '内容不能为空'; err.hidden = false; return; }
+      if (v === it.content) { closeSheet(); return; }
+      if (!force && it.visibility === 'public' && isSensitive(v)) {
+        confirmSensitive(v, () => doSave(true), async () => {
+          try { await api('/api/items/' + it.uuid, { method: 'PATCH', body: { content: v, visibility: 'private' } }); toast('已保存并改为私有'); refreshScoped(); } catch (e) { toast(e.message, 'err'); }
+        });
+        return;
+      }
+      save.disabled = true; err.hidden = true;
+      try {
+        await api('/api/items/' + it.uuid, { method: 'PATCH', body: { content: v } });
+        toast('已保存'); closeSheet(); refreshScoped();
+      } catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    };
+    save.addEventListener('click', () => doSave(false));
+    ta.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); doSave(false); } });
+    showSheet('edit', h('div', {}, h('h2', { id: 'sheetTitle', text: '编辑文本' }),
+      h('p', { class: 'lead', text: '保存后同步到所有设备，分享链接保持不变。Ctrl/⌘ + Enter 保存。' }),
+      ta, err, h('div', { class: 'btn-row', style: 'margin-top:14px' }, cancel, save)));
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 80);
+  }
+
   function openTags(it) {
     const cur = [...(it.tags || [])];
     const input = h('input', { type: 'text', placeholder: '输入标签后回车，最多 8 个', maxlength: '32' });
@@ -1002,6 +1042,7 @@
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.8` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 
@@ -1142,5 +1183,5 @@
     window.addEventListener('focus', () => refreshScoped());
   }
   boot();
-  window.__clip = { state, openAdd, openAuth, openShare, openTags, setScope, setFilter, setQuery, setTag, setStarred, refreshScoped, isSensitive, enqueue };
+  window.__clip = { state, openEdit, openAdd, openAuth, openShare, openTags, setScope, setFilter, setQuery, setTag, setStarred, refreshScoped, isSensitive, enqueue };
 })();

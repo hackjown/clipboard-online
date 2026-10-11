@@ -79,6 +79,33 @@ class ClipApi {
         if (deviceId.isNotEmpty) 'X-Device-Id': deviceId,
       };
 
+  /// 最近一次从 /api/version 读到的服务器版本（旧服务器没有该接口 → null）
+  String? serverVersion;
+  List<String> serverFeatures = const [];
+
+  Future<String?> fetchServerVersion() async {
+    try {
+      final r = await http.get(_u('/api/version'), headers: _authHeaders).timeout(const Duration(seconds: 6));
+      if (r.statusCode == 200) {
+        final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+        serverVersion = j['version']?.toString();
+        serverFeatures = ((j['features'] as List?) ?? const []).map((e) => e.toString()).toList();
+      } else {
+        serverVersion = null;
+        serverFeatures = const [];
+      }
+    } catch (_) {}
+    return serverVersion;
+  }
+
+  /// 编辑文本条目（仅所有者）
+  Future<void> editText(String uuid, String content) async {
+    final r = await http.patch(_u('/api/items/$uuid'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({'content': content})));
+    await _json(r);
+  }
+
   // ---- 压缩包目录预览（只列目录，不解压）----
   Future<ArchiveListing> archiveListing(String uuid) async {
     final r = await http.get(_u('/api/items/$uuid/archive'), headers: _authHeaders);
@@ -124,8 +151,13 @@ class ClipApi {
       if (d is Map<String, dynamic>) body = d;
     } catch (_) {}
     if (r.statusCode < 200 || r.statusCode >= 300) {
+      var msg = (body['error'] ?? body['detail'] ?? '请求失败 (${r.statusCode})').toString();
+      // 旧版服务器缺少路由时返回裸的 "Not Found"（我们自己的 404 都有中文说明）
+      if (r.statusCode == 404 && msg == 'Not Found') {
+        msg = '服务器版本过旧（${serverVersion ?? '早于 0.1.8'}），请更新 Docker 镜像';
+      }
       throw ApiException(
-        (body['error'] ?? body['detail'] ?? '请求失败 (${r.statusCode})').toString(),
+        msg,
         status: r.statusCode,
         method: r.request?.method,
         url: r.request?.url.toString(),

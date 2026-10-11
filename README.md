@@ -85,7 +85,14 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.7）
+## 本版新增（v0.1.8）
+
+- **分享扩展不再使用 URLSession**：扩展里用 Network.framework 的 `NWConnection` 自己实现了一个极简 HTTP/1.1 客户端（登录 JSON、文本 JSON、文件 multipart 按 256KB 分块从磁盘流式发送；进度 / 取消 / 超时；支持 Content-Length 与 chunked 响应；不跟随重定向）。它是纯 TCP/TLS，不经过 CFNetwork，因此 ATS 无法介入。扩展 Info.plist 另外加了按域名的 `NSExceptionDomains`（与 `NSAllowsArbitraryLoads` 并存）。
+- **分享面板错误里带诊断行**：`［诊断］扩展 v版本(build) · bundle · iOS 版本 · App Group 可用/不可用 · 传输=NWConnection · 运行时 ATS 配置=…`，同时写入扩展日志（设置里可见）。读法见 `client/ios/SHARE_EXTENSION.md`。
+- **Bark 测试 “Not Found”**：这是 FastAPI 对「不存在的路由」的默认回复，不是我们的 502 文案——最可能是服务器还在旧 Docker 镜像（没有 `/api/settings/bark/test`）。现在 `GET /api/version` 与 `/api/config` 返回 `version` / `features`；客户端设置页显示「客户端版本 / 服务器版本」，遇到裸 404 会提示「服务器版本过旧（x.y.z），请更新 Docker 镜像」。Bark 推送先 `POST {host}/{key}`，404 时回退 `POST {host}/push`（带 `device_key`），并显示 Bark 自己的错误信息；`…/KEY`、`…/KEY/`、`…/KEY/内容`、自建服务器地址都能识别。
+- **文本可编辑**：`PATCH /api/items/<uuid>`（仅所有者；`content` / `visibility` / `expires_in` / `tags`；更新 `updated`，分享令牌不变，WebSocket 广播 `update`）。Web 文本卡片「编辑」按钮（⌘/Ctrl+Enter 保存），Flutter 三端文本卡片「编辑」。同时修复了 Web 卡片缓存不随内容变化刷新的问题。
+
+## 更早的版本（v0.1.7）
 
 - **iOS 分享扩展 ATS 根因已定位并修复**：苹果文档规定 iOS 10+/macOS 10.12+ 只要 Info.plist 里同时出现 `NSAllowsArbitraryLoadsForMedia` / `NSAllowsArbitraryLoadsInWebContent` / `NSAllowsLocalNetworking` 任意一个，系统就**忽略** `NSAllowsArbitraryLoads`。我们 v0.1.4–v0.1.6 恰好都带了这些键，所以明文 `http://` 被拦。现在 Runner（iOS / macOS）与分享扩展的 Info.plist 都**只保留** `NSAllowsArbitraryLoads=true`；CI 新增 `client/tool/verify_ats.sh`，逐个检查 IPA 内主 App 与 `.appex`（含 TrollStore IPA）以及 macOS app 的 Info.plist，出现冲突键会让构建失败。
 - **首页布局**：「快传」不再内嵌在首页，标签栏旁新增「快传」按钮，点开独立页面（iOS / Android / macOS 主窗口；菜单栏浮窗仍保留紧凑投放区）。
