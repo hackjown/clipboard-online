@@ -23,3 +23,5 @@ server/.venv/
 *.iml
 .idea/
 .vscode/
+client/.flutter-plugins-dependencies
+client/.flutter-plugins
