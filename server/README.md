@@ -54,7 +54,7 @@ CLIP_DATA_DIR=./data python tools/seed_demo.py   # 可选：灌示例数据（�
 | --- | --- | --- |
 | `CLIP_REGISTER` | 开 | `0` 关闭注册 |
 | `CLIP_MAX_UPLOAD_MB` | 200 | 单文件上限 |
-| `CLIP_BARK_ALLOW_PRIVATE` | 关 | `1` 允许 Bark 地址指向内网 / 本机（自建 Bark 用；默认为防 SSRF 而拒绝） |
+| `CLIP_BARK_ALLOW_PRIVATE` | 关 | `1` 允许 Bark 地址指向内网 / 本机（自建 Bark、或服务器处于 fake-IP 代理环境时用；默认为防 SSRF 而拒绝）。官方 `api.day.app` 及子域名不受此限制。例：`docker run -d -p 8100:8099 -e CLIP_BARK_ALLOW_PRIVATE=1 -v clip-data:/data ghcr.io/hackjown/clipboard-online/clipboard-online:latest` |
 | `CLIP_MAX_TEXT_KB` | 1024 | 单条文本上限 |
 | `CLIP_DATA_DIR` | `./data` | users / items / user_meta / uploads |
 

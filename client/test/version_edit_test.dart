@@ -10,6 +10,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  versionCompareTests();
   test('kClientVersion 与 pubspec 一致', () {
     final v = RegExp(r'^version:\s*([0-9.]+)\+', multiLine: true)
         .firstMatch(File('pubspec.yaml').readAsStringSync())!
@@ -61,5 +62,21 @@ void main() {
     expect(seen.method, 'PATCH');
     expect(seen.url.path, '/api/items/u1');
     expect(jsonDecode(utf8.decode(seen.bodyBytes))['content'], '新内容');
+  });
+}
+
+void versionCompareTests() {
+  test('compareVersions', () {
+    expect(compareVersions('0.1.8', '0.1.9') < 0, isTrue);
+    expect(compareVersions('0.1.9', '0.1.9'), 0);
+    expect(compareVersions('0.2.0', '0.1.9') > 0, isTrue);
+    expect(compareVersions('0.1.10', '0.1.9') > 0, isTrue);
+    expect(compareVersions('1.0', '1.0.0'), 0);
+    expect(compareVersions('0.1.9+10', '0.1.9'), 0);
+  });
+  test('更新命令包含镜像与 compose', () {
+    final c = serverUpdateCommands();
+    expect(c, contains(kServerImage));
+    expect(c, contains('docker compose pull'));
   });
 }

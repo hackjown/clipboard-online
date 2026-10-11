@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_info.dart';
 import '../services/api.dart';
@@ -76,6 +77,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _verLoaded = false;
 
+  /// 服务器版本低于 App（或服务器太旧没有 /api/version）→ 红色横幅 + 可复制的更新命令
+  Widget _versionBanner() {
+    if (!_verLoaded) return const SizedBox.shrink();
+    final sv = widget.api.serverVersion;
+    final outdated = sv == null || compareVersions(sv, kClientVersion) < 0;
+    if (!outdated) return const SizedBox.shrink();
+    final msg = sv == null
+        ? 'App 连接的服务器版本过旧（早于 0.1.8，缺少 /api/version），低于 App $kClientVersion'
+        : 'App 连接的服务器版本 $sv 低于 App $kClientVersion';
+    final cmds = serverUpdateCommands();
+    final red = Theme.of(context).colorScheme.error;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.10),
+        border: Border.all(color: red, width: 2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(msg, style: TextStyle(color: red, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text('当前使用的服务器：${widget.api.base}', style: const TextStyle(fontSize: 13)),
+        const SizedBox(height: 4),
+        const Text('Bark 推送、压缩包预览、文本编辑等新功能需要新版服务器。请在服务器上更新镜像：', style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(8),
+          color: Colors.black.withValues(alpha: 0.06),
+          child: SelectableText(cmds, style: const TextStyle(fontFamily: 'Menlo', fontSize: 11.5, height: 1.4)),
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('复制更新命令'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: cmds));
+              _toast('已复制更新命令');
+            },
+          ),
+        ),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMac = !kIsWeb && Platform.isMacOS;
@@ -85,6 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _versionBanner(),
           TextField(
             controller: _base,
             decoration: const InputDecoration(
@@ -127,6 +176,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('版本'),
             subtitle: Text(
               '客户端 $kClientVersion\n'
+              '服务器地址 ${widget.api.base}\n'
               '服务器 ${!_verLoaded ? '读取中…' : (widget.api.serverVersion ?? '未知（早于 0.1.8，缺少 /api/version）')}'
               '${_verLoaded && widget.api.serverVersion == null ? '\n服务器版本过旧，请更新 Docker 镜像（Bark / 压缩包预览 / 文本编辑等功能需要新版服务器）' : ''}',
             ),

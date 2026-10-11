@@ -161,3 +161,9 @@ macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
 - 设置页显示「客户端版本 / 服务器版本」；请求遇到裸 404 会提示服务器版本过旧。
 - 文本卡片「编辑」（仅自己的文本）；其它设备经 WebSocket 同步。
 - iOS 分享扩展传输层改为 NWConnection，见 `ios/SHARE_EXTENSION.md`。
+
+
+## v0.1.9 说明
+
+- PDF 预览：`pdfx`（iOS / Android / macOS 原生渲染）。PDF 先用带认证的客户端下载到缓存，再本地渲染；失败时仍可用「分享 / 保存」。
+- 设置页：服务器版本低于 App 时显示红色横幅 + 可复制的更新命令，并显示当前使用的服务器地址。

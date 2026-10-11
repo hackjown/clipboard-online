@@ -85,7 +85,19 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.8）
+## 本版新增（v0.1.9）
+
+- **App 内 PDF 预览**（iOS / Android / macOS）：带认证下载到本机缓存（进度 / 复用 / 可取消，与视频同一套），用 [`pdfx`](https://pub.dev/packages/pdfx) 渲染（系统原生渲染，无需额外原生配置），支持滚动 / 双指缩放 / 页码，底部仍有分享 / 保存。Web 的 iframe 预览不变。
+- **Bark 被 SSRF 检查误拦**：服务器若处于 OpenClash / fake-IP 之类的代理环境，`api.day.app` 会被解析成内网地址（如 `198.18.x.x`、`192.168.x.x`）。现在：**官方域名 `api.day.app` 及其子域名**无论 DNS 解析到什么都放行（含 `198.18.0.0/15`），其它域名仍按 SSRF 规则拦截；IP 字面量（如 `https://198.18.0.1/KEY`）仍会被拦。拦截时的提示会写明「哪个域名解析到了哪个 IP」，并给出可复制的示例。自建在内网的 Bark / 想放行所有内网地址时，给服务器设置环境变量 `CLIP_BARK_ALLOW_PRIVATE=1`：
+
+  ```bash
+  docker run -d --name clipboard --restart unless-stopped -p 8100:8099 \
+    -e CLIP_BARK_ALLOW_PRIVATE=1 -v clip-data:/data \
+    ghcr.io/hackjown/clipboard-online/clipboard-online:latest
+  ```
+- **版本不一致横幅**：客户端「设置」在服务器版本低于 App（或太旧没有 `/api/version`）时显示红色横幅，写明当前连接的服务器地址与版本，并附可复制的 Docker 更新命令。
+
+## 更早的版本（v0.1.8）
 
 - **分享扩展不再使用 URLSession**：扩展里用 Network.framework 的 `NWConnection` 自己实现了一个极简 HTTP/1.1 客户端（登录 JSON、文本 JSON、文件 multipart 按 256KB 分块从磁盘流式发送；进度 / 取消 / 超时；支持 Content-Length 与 chunked 响应；不跟随重定向）。它是纯 TCP/TLS，不经过 CFNetwork，因此 ATS 无法介入。扩展 Info.plist 另外加了按域名的 `NSExceptionDomains`（与 `NSAllowsArbitraryLoads` 并存）。
 - **分享面板错误里带诊断行**：`［诊断］扩展 v版本(build) · bundle · iOS 版本 · App Group 可用/不可用 · 传输=NWConnection · 运行时 ATS 配置=…`，同时写入扩展日志（设置里可见）。读法见 `client/ios/SHARE_EXTENSION.md`。

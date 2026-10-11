@@ -158,3 +158,72 @@ def test_push_failure_does_not_break_write(tmp_path):
         assert r.status_code == 200
         time.sleep(0.3)
         assert c.get("/api/items").status_code == 200
+
+
+# ---- SSRF：官方 api.day.app 放行（fake-IP / 内网 DNS），其它域名仍拦 ----
+import socket
+
+
+def fake_dns(monkeypatch, mapping):
+    real = socket.getaddrinfo
+
+    def gai(host, port, *a, **k):
+        if host in mapping:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (mapping[host], port or 0))]
+        return real(host, port, *a, **k)
+    monkeypatch.setattr(socket, "getaddrinfo", gai)
+
+
+@pytest.mark.parametrize("ip", ["198.18.0.7", "198.19.255.1", "192.168.1.1", "10.1.2.3", "127.0.0.1"])
+def test_official_host_allowed_even_if_dns_is_private(monkeypatch, ip):
+    fake_dns(monkeypatch, {"api.day.app": ip, "push.api.day.app": ip})
+    assert check_bark_url("https://api.day.app/KEY/", False) == "https://api.day.app/KEY"
+    assert check_bark_url("https://API.DAY.APP./KEY", False)
+    assert check_bark_url("https://push.api.day.app/KEY", False)
+
+
+@pytest.mark.parametrize("bad", [
+    "https://api.day.app.evil.com/KEY", "https://evilapi.day.app/KEY", "https://notapi.day.app/KEY",
+    "https://day.app/KEY", "https://other.example.com/KEY",
+])
+def test_lookalike_hosts_still_blocked(monkeypatch, bad):
+    fake_dns(monkeypatch, {"api.day.app.evil.com": "198.18.0.9", "evilapi.day.app": "198.18.0.9",
+                           "notapi.day.app": "198.18.0.9", "day.app": "198.18.0.9", "other.example.com": "198.18.0.9"})
+    with pytest.raises(ValueError):
+        check_bark_url(bad, False)
+
+
+def test_error_message_names_host_ip_and_env_example(monkeypatch):
+    fake_dns(monkeypatch, {"bark.lan.example": "192.168.50.9"})
+    with pytest.raises(ValueError) as ei:
+        check_bark_url("https://bark.lan.example/KEY", False)
+    m = str(ei.value)
+    assert "bark.lan.example" in m and "192.168.50.9" in m
+    assert "CLIP_BARK_ALLOW_PRIVATE=1" in m and "docker run" in m
+
+
+@pytest.mark.parametrize("lit", ["https://198.18.0.1/KEY", "http://192.168.1.2/KEY", "http://[fd00::1]/KEY"])
+def test_ip_literals_in_private_ranges_blocked_even_for_fake_ip(lit):
+    with pytest.raises(ValueError) as ei:
+        check_bark_url(lit, False)
+    assert "CLIP_BARK_ALLOW_PRIVATE=1" in str(ei.value)
+    assert check_bark_url(lit, True)   # 显式开启后允许
+
+
+def test_only_official_host_gets_fake_ip_pass(monkeypatch):
+    fake_dns(monkeypatch, {"api.day.app": "198.18.0.7", "mybark.example.org": "198.18.0.7"})
+    assert check_bark_url("https://api.day.app/K", False)
+    with pytest.raises(ValueError):
+        check_bark_url("https://mybark.example.org/K", False)
+
+
+def test_test_endpoint_works_for_official_host_behind_fake_ip(tmp_path, monkeypatch):
+    fake_dns(monkeypatch, {"api.day.app": "198.18.0.7"})
+    app = create_app(data_dir=str(tmp_path), allow_register=True, bark_allow_private=False)
+    fake = FakeBark()
+    app.state.bark_transport = fake.transport
+    with TestClient(app) as c:
+        c.post("/api/register", json={"username": "alice", "password": "demo123"})
+        assert c.put("/api/settings/bark", json={"bark_url": "https://api.day.app/KEY9"}).status_code == 200
+        assert c.post("/api/settings/bark/test", json={}).status_code == 200
+        assert fake.calls[0][0] == "https://api.day.app/KEY9"

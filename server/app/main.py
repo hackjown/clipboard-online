@@ -490,6 +490,26 @@ def _ip_blocked(ip: str) -> bool:
             or a.is_unspecified or (a.version == 6 and a.ipv4_mapped is not None and _ip_blocked(str(a.ipv4_mapped))))
 
 
+BARK_OFFICIAL_HOST = "api.day.app"
+
+DOCKER_HINT = ("docker run -d -p 8100:8099 -e CLIP_BARK_ALLOW_PRIVATE=1 -v clip-data:/data "
+               "ghcr.io/hackjown/clipboard-online/clipboard-online:latest")
+
+
+def is_official_bark_host(host: str) -> bool:
+    """官方 Bark 主机：api.day.app 及其子域名（精确匹配后缀，api.day.app.evil.com 不算）。"""
+    h = (host or "").lower().rstrip(".")
+    return h == BARK_OFFICIAL_HOST or h.endswith("." + BARK_OFFICIAL_HOST)
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.split("%")[0])
+        return True
+    except ValueError:
+        return False
+
+
 def check_bark_url(raw: str, allow_private: bool) -> str:
     """校验并规范化 Bark 地址；不合法抛 ValueError（文案可直接给用户看）。"""
     u = (raw or "").strip()
@@ -500,13 +520,23 @@ def check_bark_url(raw: str, allow_private: bool) -> str:
         raise ValueError("Bark 地址必须以 http:// 或 https:// 开头，例如 https://api.day.app/你的Key")
     if pu.username or pu.password:
         raise ValueError("地址里不要包含用户名/密码")
-    if not allow_private:
+    host = pu.hostname
+    # 用户输入的是官方公网域名：即使本机 DNS 被代理解析成内网 / fake-IP（198.18.0.0/15、192.168.x.x…）也放行。
+    # 注意：这只对「域名」生效，IP 字面量仍按下面的规则检查。
+    if not allow_private and not (is_official_bark_host(host) and not _is_ip_literal(host)):
         try:
-            infos = socket.getaddrinfo(pu.hostname, pu.port or (443 if pu.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
-        except OSError:
-            raise ValueError("无法解析 Bark 服务器域名")
-        if not infos or any(_ip_blocked(i[4][0]) for i in infos):
-            raise ValueError("出于安全考虑，不允许推送到内网 / 本机地址（自建 Bark 在内网请设置环境变量 CLIP_BARK_ALLOW_PRIVATE=1）")
+            infos = socket.getaddrinfo(host, pu.port or (443 if pu.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+        except OSError as e:
+            raise ValueError(f"无法解析 Bark 服务器域名 {host}（{e}）")
+        ips = sorted({i[4][0] for i in infos})
+        bad = [ip for ip in ips if _ip_blocked(ip)]
+        if not ips or bad:
+            what = f"{host} 解析到 {', '.join(bad or ips)}" if not _is_ip_literal(host) else f"地址 {host} 是内网 / 本机 IP"
+            raise ValueError(
+                f"出于安全考虑，不允许推送到内网 / 本机地址：{what}。"
+                f"若你的服务器在 OpenClash / fake-IP 之类的代理环境下，或 Bark 是自建在内网的，请给服务器设置环境变量 CLIP_BARK_ALLOW_PRIVATE=1，"
+                f"例如：{DOCKER_HINT}"
+            )
     return u.rstrip("/") if not pu.query else u
 
 

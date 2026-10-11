@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/item.dart';
@@ -34,6 +35,7 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
   bool _downloading = false;
   String _progressText = '';
   VideoPlayerController? _vc;
+  PdfControllerPinch? _pdf;
   String? _text;
   String? _err;
   bool _busy = false;
@@ -79,6 +81,28 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
           });
           if (mounted) setState(() => _downloading = false);
           if (it.mediaKind == MediaKind.video) await c.play();
+        case MediaKind.pdf:
+          // 与视频同一套：带认证下载到本机缓存（进度 / 复用 / 可取消），再用本地文件渲染
+          setState(() => _downloading = true);
+          final pf = await _cache.fetch(
+            uuid: it.uuid,
+            filename: it.filename ?? 'document.pdf',
+            url: _url,
+            expectedSize: it.size,
+            cancel: _cancel,
+            onProgress: (got, total) {
+              if (!mounted) return;
+              setState(() {
+                _progress = total > 0 ? got / total : null;
+                _progressText = total > 0
+                    ? '${(got / 1048576).toStringAsFixed(1)} / ${(total / 1048576).toStringAsFixed(1)} MB'
+                    : '${(got / 1048576).toStringAsFixed(1)} MB';
+              });
+            },
+          );
+          if (!mounted) return;
+          _pdf = PdfControllerPinch(document: PdfDocument.openFile(pf.path));
+          if (mounted) setState(() => _downloading = false);
         case MediaKind.text:
           if (it.isText) {
             _text = it.content ?? '';
@@ -110,6 +134,7 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
   void dispose() {
     _cancel.cancel();
     _vc?.dispose();
+    _pdf?.dispose();
     super.dispose();
   }
 
@@ -273,6 +298,42 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
       case MediaKind.archive:
         return ArchiveView(api: widget.api, item: it);
       case MediaKind.pdf:
+        final pc = _pdf;
+        if (pc == null) return _loading(context);
+        return Column(children: [
+          Expanded(
+            child: PdfViewPinch(
+              controller: pc,
+              backgroundDecoration: BoxDecoration(color: t.paper2),
+              builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
+                options: const DefaultBuilderOptions(),
+                documentLoaderBuilder: (_) => const Center(child: CircularProgressIndicator()),
+                pageLoaderBuilder: (_) => const Center(child: CircularProgressIndicator()),
+                errorBuilder: (_, error) => Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text('PDF 无法渲染：$error\n可用下方「分享 / 保存」交给其它应用打开。',
+                        textAlign: TextAlign.center, style: TextStyle(color: t.danger)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Container(
+            width: double.infinity,
+            color: t.paper,
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Center(
+              child: PdfPageNumber(
+                controller: pc,
+                builder: (_, state, page, pages) => Text(
+                  state == PdfLoadingState.success ? '第 $page / ${pages ?? '?'} 页 · 双指缩放 / 滚动' : '',
+                  style: t.monoStyle(12.5),
+                ),
+              ),
+            ),
+          ),
+        ]);
       case MediaKind.other:
         return Center(
           child: InkCard(
