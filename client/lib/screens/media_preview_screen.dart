@@ -11,6 +11,7 @@ import 'package:video_player/video_player.dart';
 import '../models/item.dart';
 import '../services/api.dart';
 import '../services/file_transfer.dart';
+import '../services/media_cache.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 
@@ -26,6 +27,11 @@ class MediaPreviewScreen extends StatefulWidget {
 
 class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
   late final FileTransferService _xfer = FileTransferService(widget.api);
+  late final MediaCache _cache = MediaCache(widget.api);
+  final DownloadCancel _cancel = DownloadCancel();
+  double? _progress; // null=未知；0..1
+  bool _downloading = false;
+  String _progressText = '';
   VideoPlayerController? _vc;
   String? _text;
   String? _err;
@@ -45,15 +51,32 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
       switch (it.mediaKind) {
         case MediaKind.video:
         case MediaKind.audio:
-          final c = VideoPlayerController.networkUrl(
-            Uri.parse(_url),
-            httpHeaders: widget.api.authHeaders,
+          // 先用带认证的 Dart HTTP 客户端下载到本地缓存，再用本地文件播放（避开 AVPlayer 的 ATS / 认证头问题）
+          setState(() => _downloading = true);
+          final f = await _cache.fetch(
+            uuid: it.uuid,
+            filename: it.filename ?? 'media',
+            url: _url,
+            expectedSize: it.size,
+            cancel: _cancel,
+            onProgress: (got, total) {
+              if (!mounted) return;
+              setState(() {
+                _progress = total > 0 ? got / total : null;
+                _progressText = total > 0
+                    ? '${(got / 1048576).toStringAsFixed(1)} / ${(total / 1048576).toStringAsFixed(1)} MB'
+                    : '${(got / 1048576).toStringAsFixed(1)} MB';
+              });
+            },
           );
+          if (!mounted) return;
+          final c = VideoPlayerController.file(f);
           _vc = c;
           await c.initialize();
           c.addListener(() {
             if (mounted) setState(() {});
           });
+          if (mounted) setState(() => _downloading = false);
           if (it.mediaKind == MediaKind.video) await c.play();
         case MediaKind.text:
           if (it.isText) {
@@ -68,7 +91,8 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
           break;
       }
     } catch (e) {
-      _err = '加载失败：$e';
+      if (e is! DownloadCancelled) _err = '加载失败：$e';
+      _downloading = false;
     }
     if (mounted) setState(() {});
   }
@@ -83,6 +107,7 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
 
   @override
   void dispose() {
+    _cancel.cancel();
     _vc?.dispose();
     super.dispose();
   }
@@ -169,6 +194,34 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
     );
   }
 
+  Widget _loading(BuildContext context) {
+    final t = context.ink;
+    return Center(
+      child: InkCard(
+        margin: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(_downloading ? '正在下载到本机缓存…' : '正在准备播放…', style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 14),
+          LinearProgressIndicator(value: _progress, color: t.accent, backgroundColor: t.ink.withValues(alpha: 0.15), minHeight: 8),
+          const SizedBox(height: 8),
+          Text(_progress != null ? '${(_progress! * 100).toStringAsFixed(0)}%  $_progressText' : _progressText,
+              style: t.monoStyle(12, color: t.muted)),
+          const SizedBox(height: 14),
+          if (_downloading)
+            InkButton(
+              label: '取消',
+              dense: true,
+              onPressed: () {
+                _cancel.cancel();
+                Navigator.of(context).maybePop();
+              },
+            ),
+        ]),
+      ),
+    );
+  }
+
   Widget _body(BuildContext context, MediaKind kind) {
     final t = context.ink;
     if (_err != null) {
@@ -179,7 +232,7 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
         return _ImageViewer(url: _url, headers: widget.api.authHeaders);
       case MediaKind.video:
         final c = _vc;
-        if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator());
+        if (c == null || !c.value.isInitialized) return _loading(context);
         return Column(children: [
           Expanded(
             child: Container(
@@ -192,7 +245,7 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
         ]);
       case MediaKind.audio:
         final c = _vc;
-        if (c == null || !c.value.isInitialized) return const Center(child: CircularProgressIndicator());
+        if (c == null || !c.value.isInitialized) return _loading(context);
         return Center(
           child: InkCard(
             margin: const EdgeInsets.all(24),

@@ -92,10 +92,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
-          const ListTile(
-            title: Text('演示账号'),
-            subtitle: Text('demo1 / demo123'),
-          ),
         ],
       ),
     );

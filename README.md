@@ -9,14 +9,6 @@ clipboard_online/
   .github/    Docker / Flutter CI
 ```
 
-## 演示账号
-
-| 用户名 | 密码 |
-| --- | --- |
-| `demo1` | `demo123` |
-| `demo2` | `demo123` |
-| `alice` | `demo123` |
-
 ## 服务端（Docker / 本地）
 
 ```bash

@@ -16,7 +16,7 @@ flutter run -d <ios-device>
 flutter run -d <android-device>
 ```
 
-登录页可改「服务器地址」。演示账号 `demo1` / `demo123`。
+登录页可改「服务器地址」。
 
 ## 功能对照
 
@@ -140,3 +140,9 @@ macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
 - **关闭窗口 = 隐藏**，App 继续运行（WebSocket 与本地通知照常工作；窗口隐藏时新内容一定会弹通知）。
 - 设置页（仅 macOS）：「在 Dock 显示图标」开关（关闭后仅菜单栏，运行时切换，无需 LSUIElement）与「开机自启」（`SMAppService`，macOS 13+；**未签名 App 可能被系统拒绝**，失败时会提示，可到「系统设置 → 通用 → 登录项」手动添加）。
 - 限制：`tray_manager` 不支持把文件直接拖到菜单栏图标上，请先点开小窗再拖入。
+
+## v0.1.5 说明
+
+- **视频 / 音频播放**：先用 App 自带的带认证 HTTP 客户端把文件下载到临时缓存（`clip_media/<uuid>_<文件名>`，显示进度、可取消、大小一致时复用缓存），再从本地文件播放。这样不受 macOS/iOS ATS（局域网 `http://` 报 -1022）和 AVPlayer 无法带 Bearer 头的限制；macOS / iOS / Android 均走此路径。
+- **ATS**：`Info.plist` 使用 `NSAllowsArbitraryLoads` + `NSAllowsArbitraryLoadsForMedia` + `NSAllowsArbitraryLoadsInWebContent`；已移除可能与之冲突的 `NSAllowsLocalNetworking`。
+- **外观**：三端均为 `ThemeMode.system`，跟随系统浅色 / 深色，没有单独的主题设置项。

@@ -16,7 +16,7 @@ POST /api/register
 POST /api/login
 Content-Type: application/json
 
-{"username":"demo1","password":"demo123"}
+{"username":"<用户名>","password":"<密码>"}
 ```
 
 成功响应：
@@ -24,7 +24,7 @@ Content-Type: application/json
 ```json
 {
   "ok": true,
-  "user": {"id":"…","username":"demo1","created_at": 1710000000},
+  "user": {"id":"…","username":"alice","created_at": 1710000000},
   "token": "<签名会话令牌>"
 }
 ```
@@ -90,7 +90,7 @@ Authorization: Bearer …
     "uuid": "…", "type": "text|file", "visibility": "public|private",
     "content": "…", "filename": "…", "ext": "png", "is_image": true,
     "size": 123, "created": 1710000000, "expires_at": null,
-    "owner_username": "demo1", "mine": true,
+    "owner_username": "alice", "mine": true,
     "favorite": false, "pinned": true, "tags": ["工作"],
     "has_share": true, "share_token": "…", "looks_md": true, "is_url": false
   }],
@@ -220,7 +220,7 @@ BASE=http://127.0.0.1:8099
 
 # 登录拿 token
 TOKEN=$(curl -s -X POST $BASE/api/login -H 'Content-Type: application/json' \
-  -d '{"username":"demo1","password":"demo123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+  -d '{"username":"<用户名>","password":"<密码>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 
 # 列表公共
 curl -s "$BASE/api/items?scope=public" | python3 -m json.tool | head

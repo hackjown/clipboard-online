@@ -45,7 +45,7 @@ PORT=9000 CLIP_REGISTER=0 ./run.sh
 ```bash
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8099
-CLIP_DATA_DIR=./data python tools/seed_demo.py   # 可选：灌演示数据
+CLIP_DATA_DIR=./data python tools/seed_demo.py   # 可选：灌示例数据（仅本地开发）
 ```
 
 ## 环境变量
@@ -56,16 +56,6 @@ CLIP_DATA_DIR=./data python tools/seed_demo.py   # 可选：灌演示数据
 | `CLIP_MAX_UPLOAD_MB` | 200 | 单文件上限 |
 | `CLIP_MAX_TEXT_KB` | 1024 | 单条文本上限 |
 | `CLIP_DATA_DIR` | `./data` | users / items / user_meta / uploads |
-
-## 演示账号
-
-| 用户名 | 密码 |
-| --- | --- |
-| `demo1` | `demo123` |
-| `demo2` | `demo123` |
-| `alice` | `demo123` |
-
-**请勿用于生产。**
 
 ## 主要接口
 
