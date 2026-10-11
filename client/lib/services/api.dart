@@ -79,6 +79,12 @@ class ClipApi {
         if (deviceId.isNotEmpty) 'X-Device-Id': deviceId,
       };
 
+  // ---- 压缩包目录预览（只列目录，不解压）----
+  Future<ArchiveListing> archiveListing(String uuid) async {
+    final r = await http.get(_u('/api/items/$uuid/archive'), headers: _authHeaders);
+    return ArchiveListing.fromJson(await _json(r));
+  }
+
   // ---- Bark 推送设置 ----
   Future<({String url, bool skipThisDevice})> getBark() async {
     final r = await http.get(_u('/api/settings/bark'), headers: _authHeaders);
@@ -317,4 +323,48 @@ class ClipApi {
     if (token != null) return '$ws/ws?token=${Uri.encodeQueryComponent(token!)}';
     return '$ws/ws';
   }
+}
+
+
+class ArchiveEntry {
+  ArchiveEntry({required this.path, required this.size, required this.isDir, this.modified, this.encrypted = false});
+  final String path;
+  final int size;
+  final bool isDir;
+  final String? modified;
+  final bool encrypted;
+}
+
+class ArchiveListing {
+  ArchiveListing({
+    required this.type,
+    required this.entries,
+    required this.total,
+    required this.totalSize,
+    required this.truncated,
+    required this.encrypted,
+  });
+  final String type;
+  final List<ArchiveEntry> entries;
+  final int total;
+  final int totalSize;
+  final bool truncated;
+  final bool encrypted;
+
+  factory ArchiveListing.fromJson(Map<String, dynamic> j) => ArchiveListing(
+        type: (j['type'] ?? '').toString(),
+        entries: ((j['entries'] as List?) ?? const [])
+            .map((e) => ArchiveEntry(
+                  path: (e['path'] ?? '').toString(),
+                  size: (e['size'] as num?)?.toInt() ?? 0,
+                  isDir: e['is_dir'] == true,
+                  modified: e['modified']?.toString(),
+                  encrypted: e['encrypted'] == true,
+                ))
+            .toList(),
+        total: (j['total'] as num?)?.toInt() ?? 0,
+        totalSize: (j['total_size'] as num?)?.toInt() ?? 0,
+        truncated: j['truncated'] == true,
+        encrypted: j['encrypted'] == true,
+      );
 }

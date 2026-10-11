@@ -1,4 +1,4 @@
-enum MediaKind { image, video, audio, text, pdf, other }
+enum MediaKind { image, video, audio, text, pdf, archive, other }
 
 class ClipItem {
   ClipItem({
@@ -68,7 +68,17 @@ class ClipItem {
         const {'txt', 'md', 'json', 'log', 'csv', 'xml', 'yaml', 'yml', 'ini', 'py', 'js', 'dart', 'sh'}.contains(e)) {
       return MediaKind.text;
     }
+    if (isArchiveName(filename ?? '')) return MediaKind.archive;
     return MediaKind.other;
+  }
+
+  /// 与服务端 archive.py 一致：按文件名判断压缩包（只预览目录，不解压）
+  static bool isArchiveName(String name) {
+    final n = name.toLowerCase();
+    const tarSuffix = ['.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tbz', '.tar.xz', '.txz'];
+    if (tarSuffix.any(n.endsWith)) return true;
+    final e = n.contains('.') ? n.split('.').last : '';
+    return const {'zip', 'jar', 'apk', 'ipa', 'aar', 'war', '7z', 'rar'}.contains(e);
   }
 
   bool get isText => type == 'text';

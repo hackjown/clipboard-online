@@ -85,7 +85,15 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.5 / v0.1.6）
+## 本版新增（v0.1.7）
+
+- **iOS 分享扩展 ATS 根因已定位并修复**：苹果文档规定 iOS 10+/macOS 10.12+ 只要 Info.plist 里同时出现 `NSAllowsArbitraryLoadsForMedia` / `NSAllowsArbitraryLoadsInWebContent` / `NSAllowsLocalNetworking` 任意一个，系统就**忽略** `NSAllowsArbitraryLoads`。我们 v0.1.4–v0.1.6 恰好都带了这些键，所以明文 `http://` 被拦。现在 Runner（iOS / macOS）与分享扩展的 Info.plist 都**只保留** `NSAllowsArbitraryLoads=true`；CI 新增 `client/tool/verify_ats.sh`，逐个检查 IPA 内主 App 与 `.appex`（含 TrollStore IPA）以及 macOS app 的 Info.plist，出现冲突键会让构建失败。
+- **首页布局**：「快传」不再内嵌在首页，标签栏旁新增「快传」按钮，点开独立页面（iOS / Android / macOS 主窗口；菜单栏浮窗仍保留紧凑投放区）。
+- **主题设置**：三端客户端「设置 → 外观主题」：跟随系统 / 浅色 / 深色（持久化）；Web 账号菜单里也可直接选这三项。
+- **Web 上传**：文件选择器去掉 `accept` 限制，任意类型、可多选（旧代码 `image/*,*/*` 在 iOS/部分浏览器只给相册）。
+- **压缩包目录预览**（Web + Flutter 三端）：`GET /api/items/<uuid>/archive`、`GET /s/<token>/archive` 返回 `{entries:[{path,size,is_dir,modified,encrypted}], total, total_size, truncated}`。支持 **zip（含 jar/apk/ipa/aar/war）、tar、tar.gz/tgz、tar.bz2、tar.xz**；**不解压、不提供条目内容**；最多 2000 条（超出 `truncated`），>2 GB 的压缩包不检查，压缩 tar 流式读取有 8 秒时间预算；加密 zip 仅显示目录并标记；损坏返回 422；文件名中的 `../`、控制/bidi 字符只当纯文本显示。**7z / rar 暂不支持**（需额外依赖），接口返回 415 与说明。私有/公共/分享/过期规则与下载一致。
+
+## 更早的版本（v0.1.5 / v0.1.6）
 
 - **iOS 安装包怎么选**：
   - **TrollStore** → 用 `clipboard-ios-trollstore.ipa`（CI 用 ldid 伪签，并给主 App 与分享扩展写入 App Group entitlement）。

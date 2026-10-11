@@ -141,6 +141,7 @@ class ItemCard extends StatelessWidget {
                         MediaKind.audio => '音频 · 点击播放',
                         MediaKind.pdf => 'PDF · 点击查看',
                         MediaKind.text => '文本文件 · 点击预览',
+                        MediaKind.archive => '压缩包 · 点击查看目录',
                         _ => '点击查看 / 分享',
                       },
                       style: t.monoStyle(12.5, color: t.muted).copyWith(height: 1.3),
@@ -242,6 +243,7 @@ class _FileTile extends StatelessWidget {
       MediaKind.pdf => (Icons.picture_as_pdf_outlined, t.pink),
       MediaKind.text => (Icons.description_outlined, t.sun),
       MediaKind.image => (Icons.image_outlined, t.sky),
+      MediaKind.archive => (Icons.folder_zip_outlined, t.lime),
       _ => (Icons.insert_drive_file_outlined, t.sky),
     };
     return Container(

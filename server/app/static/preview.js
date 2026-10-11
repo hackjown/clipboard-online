@@ -98,10 +98,76 @@
           pre.textContent = t + (o.partial ? '\n\n… 仅显示前 200KB，完整内容请下载' : '');
         })
         .catch(function (e) { if (e && e.name === 'AbortError') return; pre.textContent = '加载失败：' + (e && e.message || e); });
+    } else if (it.kind === 'archive' && it.archive) {
+      renderArchive(st, it);
     } else {
       st.stage.append(msgDl('此类型不支持在线预览', it));
     }
   }
+  // ---- 压缩包目录（只列目录，不解压；全部用 textContent 渲染）----
+  function buildTree(entries) {
+    var root = { name: '', dir: true, kids: new Map(), size: 0, count: 0 };
+    entries.forEach(function (e) {
+      var parts = String(e.path).split('/').filter(function (x) { return x !== ''; });
+      if (!parts.length) return;
+      var n = root;
+      parts.forEach(function (part, i) {
+        var last = i === parts.length - 1;
+        var key = part + (last && !e.is_dir ? '\u0000f' : '');
+        var c = n.kids.get(key);
+        if (!c) { c = { name: part, dir: !last || !!e.is_dir, kids: new Map(), size: 0, count: 0, mod: null }; n.kids.set(key, c); }
+        if (last && !e.is_dir) { c.size = e.size || 0; c.mod = e.modified; c.enc = e.encrypted; }
+        n = c;
+      });
+    });
+    (function sum(n) {
+      n.kids.forEach(function (c) { sum(c); if (c.dir) { n.size += c.size; n.count += c.count; } else { n.size += c.size; n.count += 1; } });
+      return n;
+    })(root);
+    return root;
+  }
+  function renderNode(n, depth) {
+    var frag = document.createDocumentFragment();
+    var arr = Array.from(n.kids.values()).sort(function (a, b) { return (b.dir - a.dir) || a.name.localeCompare(b.name); });
+    arr.forEach(function (c) {
+      if (c.dir) {
+        var d = document.createElement('details'); d.className = 'pv-dir'; if (depth < 1) d.open = true;
+        var s = document.createElement('summary');
+        s.append(el('span', 'pv-nm', '📁 ' + c.name), el('span', 'pv-sz', c.count + ' 项 · ' + fmtSize(c.size)));
+        d.append(s, renderNode(c, depth + 1));
+        frag.append(d);
+      } else {
+        var r = el('div', 'pv-file');
+        r.append(el('span', 'pv-nm', (c.enc ? '🔒 ' : '📄 ') + c.name), el('span', 'pv-sz', fmtSize(c.size) || '0 B'));
+        if (c.mod) r.title = c.mod;
+        frag.append(r);
+      }
+    });
+    return frag;
+  }
+  function renderArchive(st, it) {
+    var box = el('div', 'pv-arch');
+    var sum = el('p', 'pv-arch-sum', '正在读取目录…');
+    var body = el('div', 'pv-arch-body');
+    box.append(sum, body);
+    st.stage.append(box);
+    var ac = (window.AbortController ? new AbortController() : null);
+    st.abort = ac;
+    fetch(it.archive, { credentials: 'same-origin', signal: ac ? ac.signal : undefined })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (o) {
+        if (!o.ok) { sum.textContent = (o.d && (o.d.error || o.d.detail)) || '无法读取压缩包目录'; sum.className = 'pv-arch-sum err'; return; }
+        var d = o.d;
+        var bits = [d.total + ' 项', '解压后约 ' + fmtSize(d.total_size)];
+        if (d.encrypted) bits.push('含加密文件（只显示目录）');
+        if (d.truncated) bits.push('仅显示前 ' + d.entries.length + ' 项');
+        sum.textContent = bits.join(' · ');
+        body.append(renderNode(buildTree(d.entries), 0));
+        if (!d.entries.length) body.append(el('p', 'pv-hint2', '（空压缩包）'));
+      })
+      .catch(function (e) { if (e && e.name === 'AbortError') return; sum.textContent = '加载失败：' + (e && e.message || e); sum.className = 'pv-arch-sum err'; });
+  }
+
   function msgDl(text, it) {
     var w = el('div', 'pv-msg');
     w.append(el('p', null, text));

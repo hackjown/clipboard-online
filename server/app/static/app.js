@@ -250,6 +250,7 @@
       id: x.uuid, name: x.filename, kind: x.preview, size: x.size,
       src: '/download/' + encodeURIComponent(x.filename) + '?inline=1',
       dl: '/download/' + encodeURIComponent(x.filename),
+      archive: x.preview === 'archive' ? '/api/items/' + encodeURIComponent(x.uuid) + '/archive' : undefined,
     }));
   }
   function openPreview(it) {
@@ -722,7 +723,7 @@
     ta.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); } });
     const textPane = h('div', { class: 'pane' }, ta, h('div', { class: 'row-between' }, hint, addBtn));
 
-    const input = h('input', { type: 'file', multiple: true, accept: 'image/*,*/*', tabindex: '-1' });
+    const input = h('input', { type: 'file', multiple: true, id: 'fileInput', tabindex: '-1' }); // 不设 accept：任意类型、可多选（移动端也能选非图片）
     const dz = h('label', { class: 'dz', tabindex: '0' }, icon('upload'), h('b', { text: '点击选择，或拖到这里' }), h('small', { text: `支持截图粘贴 · 单文件最大 ${fmtSize(state.cfg.max_upload)}` }), input);
     dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
     input.addEventListener('change', () => { enqueue(Array.from(input.files), false); input.value = ''; });
@@ -977,6 +978,19 @@
     api('/api/settings/bark').then((d) => { input.value = d.bark_url || ''; skip.checked = !!d.bark_exclude_device && d.bark_exclude_device === DEVICE_ID; }).catch(() => {});
   }
 
+  // 主题：跟随系统 / 浅色 / 深色（直接选择，不只是循环切换）
+  function themePicker() {
+    const wrap = h('div', { class: 'theme-pick', role: 'radiogroup', 'aria-label': '主题', style: 'display:flex;gap:8px;align-items:center;margin:12px 0' },
+      h('span', { text: '主题', style: 'font-weight:700;margin-right:4px' }));
+    THEMES.forEach((v) => {
+      const b = h('button', { type: 'button', class: 'btn sm', role: 'radio', 'data-theme-opt': v, 'aria-checked': String(theme === v) }, TLABEL[v]);
+      b.addEventListener('click', () => { theme = v; applyTheme(true); $$('[data-theme-opt]', wrap).forEach((x) => { const on = x.dataset.themeOpt === v; x.setAttribute('aria-checked', String(on)); x.classList.toggle('btn--ink', on); }); });
+      if (theme === v) b.classList.add('btn--ink');
+      wrap.append(b);
+    });
+    return wrap;
+  }
+
   function openAccountMenu() {
     if (!state.user) { openAuth('login'); return; }
     showSheet('account', h('div', {}, h('h2', { id: 'sheetTitle', text: '@' + state.user.username }),
@@ -987,6 +1001,7 @@
         h('button', { type: 'button', onclick: () => openClearMenu() }, h('span', { class: 'pk-ico pk-file' }, icon('trash')), h('span', {}, h('b', { text: '清空内容' }), h('small', { text: '只清自己的' }))),
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
+      themePicker(),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 

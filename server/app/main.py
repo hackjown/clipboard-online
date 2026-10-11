@@ -29,6 +29,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Web
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .archive import ArchiveError, is_archive, list_archive
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
@@ -91,6 +93,8 @@ def preview_kind(filename: str) -> Optional[str]:
         return "pdf"
     if ext in _PREVIEW_TEXT:
         return "text"
+    if is_archive(filename or ""):
+        return "archive"  # 只列目录，不解压（见 archive.py）
     return None
 
 
@@ -1157,6 +1161,33 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             out["preview"] = preview_kind(item.get("filename") or "")
             out["download_url"] = f"/s/{token}/file"
         return out
+
+    # ---- 压缩包目录预览（不解压、不提供条目内容）----
+    def _archive_response(item: dict) -> dict:
+        path = store.file_path(item["filename"])
+        if not path or not path.is_file():
+            raise HTTPException(404, "文件不存在")
+        try:
+            return list_archive(path, item["filename"])
+        except ArchiveError as e:
+            raise HTTPException(e.status, e.message)
+
+    @app.get("/api/items/{uid}/archive")
+    def item_archive(request: Request, uid: str):
+        me = current_user(request)
+        item = store.get_item(uid)
+        if not item or item.get("type") != "file":
+            raise HTTPException(404, "条目不存在")
+        if not visible_to(item, me):
+            raise HTTPException(403, "无权查看此文件")
+        return _archive_response(item)
+
+    @app.get("/s/{token}/archive")
+    def share_archive(token: str):
+        item = store.find_by_share(token)
+        if not item or item.get("type") != "file":
+            raise HTTPException(404, "分享不存在或已过期")
+        return _archive_response(item)
 
     @app.get("/s/{token}/file")
     def share_file(token: str, inline: int = 0):

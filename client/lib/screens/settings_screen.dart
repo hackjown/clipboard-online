@@ -7,6 +7,7 @@ import '../services/api.dart';
 import '../services/auth_store.dart';
 import '../services/menubar.dart';
 import '../services/share_config.dart';
+import '../services/theme_controller.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.api, required this.store, required this.onSaved});
@@ -100,13 +101,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('保存'),
           ),
           const Divider(height: 32),
+          const Text('外观主题', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 8),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: ThemeController.instance.mode,
+            builder: (_, m, __) => SegmentedButton<ThemeMode>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: ThemeMode.system, label: Text('跟随系统')),
+                ButtonSegment(value: ThemeMode.light, label: Text('浅色')),
+                ButtonSegment(value: ThemeMode.dark, label: Text('深色')),
+              ],
+              selected: {m},
+              onSelectionChanged: (s) => ThemeController.instance.set(s.first),
+            ),
+          ),
+          const Divider(height: 32),
           ListTile(
             title: const Text('平台说明'),
             subtitle: Text(
               isMac
-                  ? 'Mac：主页「快传」支持拖放；可监听剪贴板；文件可「在访达中显示」。'
+                  ? 'Mac：首页「快传」按钮进入快传页，支持拖放；可监听剪贴板；文件可「在访达中显示」。'
                   : isIOS
-                      ? 'iOS：快传选文件，或从微信/相册/文件「分享到剪贴板」（Share Extension）。条目「分享」可转出到微信。不支持后台剪贴板监听。'
+                      ? 'iOS：首页「快传」按钮进入快传页选文件，或从微信/相册/文件「分享到剪贴板」（Share Extension）。条目「分享」可转出到微信。不支持后台剪贴板监听。'
                       : 'Android：快传选文件；其它 App「分享到剪贴板」；条目「分享」可转出到微信等。',
             ),
           ),

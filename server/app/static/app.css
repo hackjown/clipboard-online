@@ -618,3 +618,16 @@ body.pv-open { overflow: hidden; }
 .file-row.pv-able { cursor: pointer; }
 .share-media { width: 100%; max-height: 60vh; margin: 8px 0; border-radius: 12px; border: var(--line); background: #000; }
 .share-pdf { width: 100%; height: 60vh; border: var(--line); border-radius: 12px; background: #fff; margin: 8px 0; }
+
+/* 压缩包目录 */
+.pv-arch { width: min(100%, 860px); max-height: 100%; display: flex; flex-direction: column; background: var(--paper); color: var(--ink); border: var(--line); border-radius: 14px; overflow: hidden; align-self: stretch; margin: 0 auto; }
+.pv-arch-sum { margin: 0; padding: 10px 14px; font: 600 12.5px/1.4 var(--font-mono); border-bottom: var(--line); background: var(--paper-2); }
+.pv-arch-sum.err { color: var(--danger, #d4281a); }
+.pv-arch-body { overflow: auto; padding: 6px 10px 12px; font: 13px/1.5 var(--font-mono); }
+.pv-arch-body .pv-dir > div, .pv-arch-body .pv-dir > details { margin-left: 16px; }
+.pv-dir > summary, .pv-file { display: flex; gap: 12px; justify-content: space-between; align-items: baseline; padding: 3px 4px; border-radius: 6px; cursor: default; }
+.pv-dir > summary { cursor: pointer; font-weight: 700; }
+.pv-dir > summary:hover, .pv-file:hover { background: var(--paper-2); }
+.pv-nm { overflow-wrap: anywhere; min-width: 0; }
+.pv-sz { color: var(--muted); white-space: nowrap; font-size: 12px; }
+.pv-hint2 { color: var(--muted); padding: 8px 4px; }

@@ -146,3 +146,11 @@ macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
 - **视频 / 音频播放**：先用 App 自带的带认证 HTTP 客户端把文件下载到临时缓存（`clip_media/<uuid>_<文件名>`，显示进度、可取消、大小一致时复用缓存），再从本地文件播放。这样不受 macOS/iOS ATS（局域网 `http://` 报 -1022）和 AVPlayer 无法带 Bearer 头的限制；macOS / iOS / Android 均走此路径。
 - **ATS**：`Info.plist` 使用 `NSAllowsArbitraryLoads` + `NSAllowsArbitraryLoadsForMedia` + `NSAllowsArbitraryLoadsInWebContent`；已移除可能与之冲突的 `NSAllowsLocalNetworking`。
 - **外观**：三端均为 `ThemeMode.system`，跟随系统浅色 / 深色，没有单独的主题设置项。
+
+
+## v0.1.7 说明
+
+- **快传入口**：首页直接显示「我的私有」；标签栏旁的「快传」按钮打开独立快传页（菜单栏浮窗保留自己的投放区）。
+- **主题**：设置 → 外观主题（跟随系统 / 浅色 / 深色），保存在本地偏好（`theme_mode`）。
+- **压缩包预览**：zip/jar/apk/tar/tar.gz/tar.bz2/tar.xz 条目点「预览」显示目录树（文件夹可折叠、大小、解压后总大小），数据来自服务端 `/api/items/<uuid>/archive`，不下载也不解压；7z/rar 暂不支持（会提示）。
+- **ATS**：Info.plist 只保留 `NSAllowsArbitraryLoads`，见根目录 README。

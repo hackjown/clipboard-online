@@ -10,6 +10,7 @@ import 'screens/settings_screen.dart';
 import 'screens/share_view_screen.dart';
 import 'services/api.dart';
 import 'services/auth_store.dart';
+import 'services/theme_controller.dart';
 import 'theme/ink_theme.dart';
 
 class ClipboardApp extends StatefulWidget {
@@ -87,13 +88,20 @@ class _ClipboardAppState extends State<ClipboardApp> {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: ThemeController.instance.mode,
+      builder: (context, themeMode, _) => _buildApp(themeMode),
+    );
+  }
+
+  Widget _buildApp(ThemeMode themeMode) {
     return MaterialApp(
       navigatorKey: _nav,
       title: '剪贴板',
       debugShowCheckedModeBanner: false,
       theme: buildInkTheme(Brightness.light),
       darkTheme: buildInkTheme(Brightness.dark),
-      themeMode: ThemeMode.system,
+      themeMode: themeMode, // 设置里可选：跟随系统 / 浅色 / 深色
       home: !_ready
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : _user == null

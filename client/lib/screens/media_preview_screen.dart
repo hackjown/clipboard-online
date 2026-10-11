@@ -13,6 +13,7 @@ import '../services/api.dart';
 import '../services/file_transfer.dart';
 import '../services/media_cache.dart';
 import '../theme/ink_theme.dart';
+import '../widgets/archive_view.dart';
 import '../widgets/ink.dart';
 
 /// 详情 / 预览：图片（可缩放）、视频、音频、文本；其它类型提供打开 / 分享。
@@ -269,6 +270,8 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
             child: SelectableText(_text!, style: t.monoStyle(13.5)),
           ),
         );
+      case MediaKind.archive:
+        return ArchiveView(api: widget.api, item: it);
       case MediaKind.pdf:
       case MediaKind.other:
         return Center(

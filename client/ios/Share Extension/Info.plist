@@ -24,9 +24,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<!-- 只保留 NSAllowsArbitraryLoads：iOS10+/macOS10.12+ 只要同时出现 ForMedia / InWebContent / LocalNetworking 任一键，系统就会忽略 NSAllowsArbitraryLoads（Apple 文档）-->
 		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsArbitraryLoadsForMedia</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>

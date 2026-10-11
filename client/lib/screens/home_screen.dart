@@ -21,7 +21,7 @@ import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 import '../widgets/item_card.dart';
 import 'media_preview_screen.dart';
-import '../widgets/quick_transfer.dart';
+import 'quick_transfer_screen.dart';
 import 'share_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -398,6 +398,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  void _openQuickTransfer() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => QuickTransferScreen(
+        api: widget.api,
+        onSent: () {
+          if (_tabs.index != 1) _tabs.index = 1;
+          _refresh();
+        },
+      ),
+    ));
+  }
+
   Future<void> _toggleWatch(bool on) async {
     setState(() => _watchOn = on);
     MenuBarController.instance.setWatch(on);
@@ -467,15 +479,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           child: Container(
             alignment: Alignment.centerLeft,
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-            child: AnimatedBuilder(
-              animation: _tabs,
-              builder: (_, __) => InkSegment(
-                labels: const ['公共', '我的私有'],
-                counts: ['${_counts['public'] ?? ''}', '${_counts['private'] ?? ''}'],
-                index: _tabs.index,
-                onChanged: (i) => _tabs.animateTo(i),
+            child: Row(children: [
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: AnimatedBuilder(
+                    animation: _tabs,
+                    builder: (_, __) => InkSegment(
+                      labels: const ['公共', '我的私有'],
+                      counts: ['${_counts['public'] ?? ''}', '${_counts['private'] ?? ''}'],
+                      index: _tabs.index,
+                      onChanged: (i) => _tabs.animateTo(i),
+                    ),
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              // 「快传」入口：与标签并排，点开独立页面
+              InkButton(
+                label: '快传',
+                icon: Icons.bolt,
+                variant: InkVariant.accent,
+                onPressed: _openQuickTransfer,
+              ),
+            ]),
           ),
         ),
       ),
@@ -507,13 +535,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       body: PaperBackground(child: Column(
         children: [
-          QuickTransferPanel(
-            api: widget.api,
-            onSent: () {
-              if (_tabs.index != 1) _tabs.index = 1;
-              _refresh();
-            },
-          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
             child: TextField(

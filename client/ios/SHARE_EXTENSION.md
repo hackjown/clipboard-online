@@ -54,3 +54,12 @@ IPA 内含 `Payload/Runner.app/PlugIns/ShareExtension.appex`（CI 校验，缺�
 | 激活规则 | 文本、网页 URL、图片(≤100)、视频(≤20)、文件与通用附件(≤20) |
 | 主类 | `ShareViewController`（`@objc(ShareViewController)`，纯 UIKit） |
 | 主 App ↔ 扩展 | `AppDelegate.swift` 的 MethodChannel `clipboard/share_config`（`sync / status / readLog / clearLog`） |
+
+
+## v0.1.7：ATS（明文 http）问题
+
+现象：分享面板报 `The resource could not be loaded because the App Transport Security policy requires the use of a secure connection`。
+
+根因：扩展有自己独立的 Info.plist，ATS 设置不继承主 App；而且 iOS 10+ 规定只要出现 `NSAllowsArbitraryLoadsForMedia` / `NSAllowsArbitraryLoadsInWebContent` / `NSAllowsLocalNetworking` 任一键，`NSAllowsArbitraryLoads` 就被忽略（Apple 文档 NSAllowsArbitraryLoads）。旧版本同时写了这些键，等于没开。
+
+修复：Runner 与 ShareExtension 的 Info.plist 只保留 `NSAllowsArbitraryLoads=true`。CI 用 `client/tool/verify_ats.sh` 解包 IPA 逐个检查（unsigned 与 TrollStore 两个 IPA）。注意：Dart 的 `dart:io` 不受 ATS 约束，所以主 App 之前「看起来正常」并不能说明 ATS 配置正确。

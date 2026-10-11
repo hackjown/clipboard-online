@@ -23,7 +23,7 @@ def up(c, name, data, vis="private"):
 def test_preview_kind_whitelist():
     assert preview_kind("a.PNG") == "image" and preview_kind("a.mp4") == "video"
     assert preview_kind("a.mp3") == "audio" and preview_kind("a.pdf") == "pdf" and preview_kind("a.json") == "text"
-    assert preview_kind("a.html") is None and preview_kind("a.svg") is None and preview_kind("a") is None
+    assert preview_kind("a.html") is None and preview_kind("a.svg") is None and preview_kind("a") is None and preview_kind("a.zip") == "archive"
 
 
 def test_range_returns_206(client):
@@ -107,7 +107,7 @@ def test_items_expose_preview_kind(client):
     up(client, "v.mp4", b"0" * 10)
     up(client, "z.zip", b"PK")
     its = {i["filename"]: i for i in client.get("/api/items", params={"scope": "private"}).json()["items"]}
-    assert its["v.mp4"]["preview"] == "video" and its["z.zip"]["preview"] is None
+    assert its["v.mp4"]["preview"] == "video" and its["z.zip"]["preview"] == "archive"
 
 
 def test_share_link_preview(client):

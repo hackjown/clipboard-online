@@ -126,3 +126,43 @@ def test_preview_modal_and_share_page(page, server):
     page.goto(f"{server}/s/{res}")
     page.wait_for_selector("#pvimg")
     assert page.locator(".share-card .fname").count() == 1
+
+
+def test_file_input_has_no_accept_and_archive_viewer(page, server):
+    """上传面板的 <input type=file>：无 accept、可多选；压缩包预览显示目录树（纯文本渲染）。"""
+    page.evaluate("window.__clip.openAuth('register')")
+    page.wait_for_selector("#authUser")
+    page.fill("#authUser", "arcuser")
+    page.fill("#authPw", "demo1234")
+    page.click(".auth-form button[type=submit]")
+    page.wait_for_function("() => window.__clip.state.user && window.__clip.state.user.username === 'arcuser'")
+    page.evaluate("window.__clip.openAdd('file')")
+    page.wait_for_selector("#fileInput", state="attached")
+    assert page.get_attribute("#fileInput", "accept") is None
+    assert page.get_attribute("#fileInput", "multiple") is not None
+    # 静态检查：源码里不应再出现带 accept 的 file input
+    src = (ROOT / "app/static/app.js").read_text()
+    assert "type: 'file'" in src and "accept:" not in src.split("type: 'file'")[1].split("\n")[0]
+    # 上传一个 zip（含类 XSS 文件名）并在预览里看到目录
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("docs/readme.txt", "hi")
+        z.writestr("<img src=x onerror=window.__xss=1>", "x")
+    page.evaluate("""async (arr) => {
+      const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(arr)]), 'pack.zip');
+      fd.append('visibility','private'); fd.append('expires_in','0');
+      await fetch('/upload_file',{method:'POST',body:fd,credentials:'same-origin'});
+      await window.__clip.refreshScoped();
+    }""", list(buf.getvalue()))
+    page.click("#sheet .scrim", position={"x": 5, "y": 5})
+    page.wait_for_function("() => document.querySelector('#sheet').hidden")
+    page.evaluate("window.__clip.setScope('private', {force:true})")
+    page.wait_for_selector("text=pack.zip")
+    page.click(".card--file >> text=预览")
+    page.wait_for_selector(".pv-arch .pv-nm")
+    txt = page.inner_text(".pv-arch")
+    assert "readme.txt" in txt and "<img src=x" in txt and "2 项" in txt
+    assert page.evaluate("window.__xss") is None
+    page.keyboard.press("Escape")
+    assert page.locator(".pv").count() == 0

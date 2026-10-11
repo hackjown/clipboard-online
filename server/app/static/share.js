@@ -21,6 +21,7 @@
       else if(d.preview==='audio') html+='<audio class="share-media" style="height:54px;background:none;border:0" controls preload="metadata" src="'+src+'"></audio>';
       else if(d.preview==='pdf') html+='<iframe class="share-pdf" src="'+src+'" title="PDF"></iframe>';
       else if(d.preview==='text') html+='<pre class="share-text" id="pvtext">加载中…</pre>';
+      else if(d.preview==='archive') html+='<button class="btn btn--ink btn--block" id="pvarch" type="button" style="margin:8px 0">查看压缩包目录</button>';
       html+='<p class="fname">'+esc(d.filename)+'</p><p class="fsub">'+(d.ext||'').toUpperCase()+' · '+fmt(d.size)+'</p>';
       html+='<a class="btn btn--accent btn--block" href="'+base+'" download>下载文件</a>';
     }
@@ -30,6 +31,8 @@
     if(b) b.onclick=function(){ navigator.clipboard.writeText(d.content).then(function(){b.textContent='已复制';}); };
     var im=document.getElementById('pvimg');
     if(im) im.onclick=function(){ window.ClipPreview.open([{name:d.filename,kind:'image',src:src,dl:base,size:d.size}],0); };
+    var pa=document.getElementById('pvarch');
+    if(pa) pa.onclick=function(){ window.ClipPreview.open([{name:d.filename,kind:'archive',archive:'/s/'+encodeURIComponent(token)+'/archive',dl:base,size:d.size}],0); };
     var tx=document.getElementById('pvtext');
     if(tx) fetch(src,{headers:{Range:'bytes=0-204799'}}).then(function(x){return x.text();}).then(function(t){ tx.textContent=t; }).catch(function(){ tx.textContent='加载失败'; });
   }).catch(function(){ document.getElementById('status').textContent='加载失败'; });
