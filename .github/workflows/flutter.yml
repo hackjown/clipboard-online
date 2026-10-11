@@ -74,8 +74,11 @@ jobs:
           cp -R build/ios/iphoneos/Runner.app Payload/
           zip -qry "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa" Payload
           ls -la "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa"
-          # 列出内含的 appex（Share Extension 目标尚未嵌入 Xcode 工程时为空）
-          ls Payload/Runner.app/PlugIns 2>/dev/null || echo "no app extensions embedded"
+                    echo "--- IPA contents (PlugIns) ---"
+          unzip -l "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa" | grep -E "PlugIns/.*\.appex/(Info.plist|ShareExtension)$" || true
+          unzip -l "$GITHUB_WORKSPACE/clipboard-ios-unsigned.ipa" | grep -q "Payload/Runner.app/PlugIns/ShareExtension.appex/" \
+            && echo "OK: Share Extension (.appex) is embedded" \
+            || { echo "ERROR: Share Extension missing from IPA"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned
@@ -128,7 +131,7 @@ jobs:
             ## 下载说明
             - **clipboard-android.apk** — Android 安装包（debug 签名，可直接侧载）
             - **clipboard-macos.zip** — macOS `.app`，**未签名/未公证**：右键「打开」，或 `xattr -cr clipboard_client.app`
-            - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；用 AltStore / Sideloadly / TrollStore 或自有证书重签。当前 IPA 仅含主 App（Share Extension 需按 client/ios/SHARE_EXTENSION.md 在 Xcode 中配置）
+            - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；用 AltStore / Sideloadly / TrollStore 或自有证书重签。IPA 内已嵌入 Share Extension（PlugIns/ShareExtension.appex）
             - 服务端镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`
           files: |
             dist/clipboard-macos.zip
