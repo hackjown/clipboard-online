@@ -13,7 +13,7 @@ class WsSync {
   WebSocketChannel? _ch;
   StreamSubscription? _sub;
   Timer? _reconnect;
-  void Function()? onEvent;
+  void Function(Map<String, dynamic> msg)? onEvent;
   bool connected = false;
 
   void start() {
@@ -26,7 +26,7 @@ class WsSync {
           try {
             final msg = jsonDecode(data is String ? data : utf8.decode(data as List<int>));
             if (msg is Map && msg['type'] != 'hello') {
-              onEvent?.call();
+              onEvent?.call(Map<String, dynamic>.from(msg));
             }
           } catch (_) {}
         },

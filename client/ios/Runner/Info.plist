@@ -82,6 +82,8 @@
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于从相册选择图片，以及接收系统分享到剪贴板的图片</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于连接局域网内的剪贴板服务器（例如 http://192.168.x.x:8099）。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

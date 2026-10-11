@@ -33,6 +33,12 @@ flutter run -d <android-device>
 | 实时 | WebSocket，失败则 5s 轮询 |
 | Deep link | `clipboard://s/<token>` |
 
+## 局域网 HTTP 与本地通知
+
+- **局域网 http://IP:端口**：iOS/macOS 的 `Info.plist` 已配置 ATS（`NSAllowsArbitraryLoads` + `NSAllowsLocalNetworking`），iOS 另有 `NSLocalNetworkUsageDescription`（首次连接局域网会弹「本地网络」授权，请允许）；Android 已允许明文流量。WebSocket 会自动用 `ws://`（https 时用 `wss://`），不受 ATS 限制。
+- **本地通知**（`flutter_local_notifications`，iOS/macOS/Android）：App 运行中或刚退到后台时，WebSocket 收到**其他设备**上传的新私有内容，会弹「收到新文件 / 收到新文本」，并在 iOS/macOS 设置未读角标；回到前台或打开「我的私有」即清零。本机自己上传的内容不会提醒（按上传返回的 uuid 过滤）。启动时会请求通知权限。
+- **不包含后台推送**：真正的离线/杀进程后推送需要 APNs（以及开发者账号和服务端推送），侧载 IPA 做不到，本版**未提供**。App 被系统挂起后连接会断开，无法收到通知，回到前台后会自动补刷列表。
+
 ## 快传（双向）
 
 同一账号下，Mac ↔ 手机通过 **私有区 + WebSocket** 互传：

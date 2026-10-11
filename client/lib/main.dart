@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'services/notifier.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,5 +22,6 @@ Future<void> main() async {
       await windowManager.focus();
     });
   }
+  await Notifier.instance.init();
   runApp(const ClipboardApp());
 }

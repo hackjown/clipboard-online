@@ -33,6 +33,10 @@ class ClipApi {
   String? token;
   String base = AuthStore.defaultBase;
 
+  /// 本设备上传产生的 uuid，用于在 WebSocket 事件里跳过「自己发的」通知
+  final Set<String> ownUuids = <String>{};
+  int uploadsInFlight = 0;
+
   Future<void> load() async {
     base = AuthStore.normalizeBaseUrl(await store.getBaseUrl());
     token = await store.getToken();
@@ -164,7 +168,9 @@ class ClipApi {
           if (tags != null) 'tags': tags,
         }));
     final j = await _json(r);
-    return j['uuid'] as String;
+    final id = j['uuid'] as String;
+    ownUuids.add(id);
+    return id;
   }
 
   Future<String> uploadFile({
@@ -192,7 +198,9 @@ class ClipApi {
     final streamed = await req.send();
     final r = await http.Response.fromStream(streamed);
     final j = await _json(r);
-    return j['uuid'] as String;
+    final id = j['uuid'] as String;
+    ownUuids.add(id);
+    return id;
   }
 
   Future<void> delete(String uuid) async {

@@ -49,6 +49,7 @@ flutter run -d macos
 - **Mac**：可选「监听剪贴板」轮询，变化时确认后上传为私有
 - **iOS**：**不做**后台剪贴板监听；前台「从剪贴板导入」；Deep link `clipboard://s/<token>`
 - **快传**：Mac 拖放 / 手机选文件 → 私有上传，对端 WebSocket 同步；系统分享 + 访达显示
+- **通知**：App 运行/刚退后台时，其他设备发来新私有内容会本地通知 + 角标（无 APNs 后台推送，见 client/README）
 - **Android**：完整客户端；`flutter build apk --release` 见 client/README
 - **iOS 分享入**：Share Extension 源码在 `client/ios/Share Extension/`，签名步骤见 `client/ios/SHARE_EXTENSION.md`
 

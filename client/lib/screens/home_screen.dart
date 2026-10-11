@@ -13,6 +13,7 @@ import '../services/clipboard_watch.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
+import '../services/notifier.dart';
 import '../services/share_inbox.dart';
 import '../widgets/item_card.dart';
 import '../widgets/quick_transfer.dart';
@@ -36,9 +37,11 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final TabController _tabs;
   late final WsSync _ws;
+  bool _resumed = true;
+  final Set<String> _notified = <String>{};
   late final ClipboardWatch _clip;
   late final FileTransferService _xfer;
   late final ShareInbox _inbox;
@@ -58,9 +61,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.initState();
     _tabs = TabController(length: 2, vsync: this);
     _tabs.addListener(() {
-      if (!_tabs.indexIsChanging) _refresh();
+      if (!_tabs.indexIsChanging) {
+        _refresh();
+        if (_tabs.index == 1) Notifier.instance.clearUnread();
+      }
     });
-    _ws = WsSync(widget.api)..onEvent = () => _refresh(silent: true);
+    _ws = WsSync(widget.api)..onEvent = _onWsEvent;
+    WidgetsBinding.instance.addObserver(this);
+    Notifier.instance.clearUnread();
     _ws.start();
     _clip = ClipboardWatch();
     _xfer = FileTransferService(widget.api);
@@ -120,7 +128,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _resumed = state == AppLifecycleState.resumed;
+    if (_resumed) {
+      // 回到前台即视为已读
+      Notifier.instance.clearUnread();
+      _refresh(silent: true);
+    }
+  }
+
+  void _onWsEvent(Map<String, dynamic> msg) {
+    _refresh(silent: true);
+    if (msg['type'] == 'create' && msg['visibility'] == 'private') {
+      final uuid = msg['uuid'] as String?;
+      if (uuid != null) _maybeNotify(uuid);
+    }
+  }
+
+  /// 其他设备上传的新私有内容 → 本地通知 + 角标（跳过本设备自己上传的）
+  Future<void> _maybeNotify(String uuid) async {
+    // 等本机上传请求返回并登记 uuid，避免把自己发的当成「别人发的」
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (!mounted || widget.api.ownUuids.contains(uuid) || !_notified.add(uuid)) return;
+    if (_resumed && _tabs.index == 1) return; // 正看着私有列表，无需打扰
+    try {
+      final r = await widget.api.items(scope: 'private');
+      final it = r.items.where((e) => e.uuid == uuid).firstOrNull;
+      if (it == null) return;
+      final detail = it.isFile
+          ? (it.filename ?? '文件')
+          : ((it.content ?? '').length > 80 ? '${it.content!.substring(0, 80)}…' : (it.content ?? ''));
+      await Notifier.instance.notifyIncoming(isFile: it.isFile, detail: detail);
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
     _ws.stop();
     _clip.stopWatch();
