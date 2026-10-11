@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api.dart';
 import '../services/auth_store.dart';
+import '../services/menubar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.api, required this.store, required this.onSaved});
@@ -66,6 +67,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : 'Android：快传选文件；其它 App「分享到剪贴板」；条目「分享」可转出到微信等。',
             ),
           ),
+          if (MenuBarController.supported) ...[
+            ValueListenableBuilder<bool>(
+              valueListenable: MenuBarController.instance.showDock,
+              builder: (_, v, __) => SwitchListTile(
+                title: const Text('在 Dock 显示图标'),
+                subtitle: const Text('关闭后仅在菜单栏显示；关闭窗口不会退出 App'),
+                value: v,
+                onChanged: (x) => MenuBarController.instance.setShowDock(x),
+              ),
+            ),
+            ValueListenableBuilder<bool>(
+              valueListenable: MenuBarController.instance.launchAtLogin,
+              builder: (_, v, __) => SwitchListTile(
+                title: const Text('开机自启'),
+                subtitle: const Text('登录 Mac 后自动在菜单栏运行（macOS 13+，未签名 App 可能被系统拒绝）'),
+                value: v,
+                onChanged: (x) async {
+                  final err = await MenuBarController.instance.setLaunchAtLogin(x);
+                  if (err != null && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                  }
+                },
+              ),
+            ),
+          ],
           const ListTile(
             title: Text('演示账号'),
             subtitle: Text('demo1 / demo123'),

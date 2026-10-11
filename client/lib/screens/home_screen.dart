@@ -14,6 +14,7 @@ import '../services/clipboard_watch.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
+import '../services/menubar.dart';
 import '../services/notifier.dart';
 import '../services/share_inbox.dart';
 import '../theme/ink_theme.dart';
@@ -94,6 +95,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     WidgetsBinding.instance.addObserver(this);
     Notifier.instance.clearUnread();
     _ws.start();
+    if (MenuBarController.supported) MenuBarController.instance.onToggleWatch = _toggleWatch;
     _clip = ClipboardWatch();
     _xfer = FileTransferService(widget.api);
     _clip.onText = (t) { _confirmClipboardText(t); };
@@ -163,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _onWsEvent(Map<String, dynamic> msg) {
     _refresh(silent: true);
+    MenuBarController.instance.pulse.value++;
     if (msg['type'] == 'create' && msg['visibility'] == 'private') {
       final uuid = msg['uuid'] as String?;
       if (uuid != null) _maybeNotify(uuid);
@@ -174,7 +177,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     // 等本机上传请求返回并登记 uuid，避免把自己发的当成「别人发的」
     await Future<void>.delayed(const Duration(milliseconds: 1500));
     if (!mounted || widget.api.ownUuids.contains(uuid) || !_notified.add(uuid)) return;
-    if (_resumed && _tabs.index == 1) return; // 正看着私有列表，无需打扰
+    final mb = MenuBarController.instance;
+    // 正看着私有列表（主窗口可见且在前台）无需打扰；窗口隐藏在菜单栏时照常通知
+    final watching = _resumed && _tabs.index == 1 && !(MenuBarController.supported && (!mb.visible || !mb.focused));
+    if (watching) return;
     try {
       final r = await widget.api.items(scope: 'private');
       final it = r.items.where((e) => e.uuid == uuid).firstOrNull;
@@ -193,6 +199,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _ws.stop();
     _clip.stopWatch();
     _inbox.stop();
+    if (MenuBarController.supported) MenuBarController.instance.onToggleWatch = null;
     _tabs.dispose();
     super.dispose();
   }
@@ -393,6 +400,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> _toggleWatch(bool on) async {
     setState(() => _watchOn = on);
+    MenuBarController.instance.setWatch(on);
     if (on) {
       _clip.startWatch();
       if (mounted) {

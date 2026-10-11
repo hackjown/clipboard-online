@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/api.dart';
 import '../services/clipboard_watch.dart';
 import '../services/file_transfer.dart';
+import '../services/menubar.dart';
 import '../theme/ink_theme.dart';
 import 'ink.dart';
 
@@ -51,7 +52,13 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
   }
 
   Future<void> _pickFiles() async {
-    final r = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
+    MenuBarController.instance.busy++;
+    final FilePickerResult? r;
+    try {
+      r = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
+    } finally {
+      MenuBarController.instance.busy--;
+    }
     if (r == null) return;
     for (final f in r.files) {
       if (f.bytes == null) continue;
@@ -61,7 +68,13 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
   }
 
   Future<void> _pickImages() async {
-    final imgs = await ImagePicker().pickMultiImage();
+    MenuBarController.instance.busy++;
+    final List<XFile> imgs;
+    try {
+      imgs = await ImagePicker().pickMultiImage();
+    } finally {
+      MenuBarController.instance.busy--;
+    }
     for (final x in imgs) {
       final bytes = await x.readAsBytes();
       _queue.add(FileTransferService.fromBytes(

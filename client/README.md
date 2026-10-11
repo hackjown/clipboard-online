@@ -121,3 +121,22 @@ flutter build ipa --release
 - `receive_sharing_intent`：Android 分享入 + iOS Share Extension 桥接（SPM）  
 - `share_plus`：分享出  
 - `desktop_drop`：仅桌面拖放  
+
+
+## 界面主题 · 媒体预览 · 图标（v0.1.4）
+
+- **主题「纸与墨」**：`lib/theme/ink_theme.dart`（`ThemeData` + `InkTokens` 令牌，颜色与 Web `app.css` 一致：纸色背景、墨色 2px 描边、硬偏移阴影、朱红强调；标题衬线、代码等宽；深色模式跟随系统）与 `lib/widgets/ink.dart`（`InkCard / InkButton / InkChip / InkSegment / showInkSheet` 等）。
+- **媒体预览**：条目卡片与详情页 `MediaPreviewScreen`：图片（缩略图 + 全屏缩放，带 Bearer 请求头）、视频 / 音频（`video_player`，播放 / 暂停 / 拖动进度 / 时长）、文本文件（前 400KB）；PDF 及其它类型提供「分享 / 保存」交给系统打开。
+- **默认标签**：登录后默认进「我的私有」，并按用户记住上次选择。
+- **App 图标**：主图 `assets/icon/icon_master_1024.png`（iOS 全出血无透明，macOS 版 `icon_macos_1024.png` 带留白圆角，Android 前景 `icon_android_foreground_1024.png`）。由 `python3 tools/gen_icons.py`（需 Pillow）一次生成 iOS `AppIcon.appiconset`、macOS `AppIcon.appiconset`、Android `mipmap-*` 及 `mipmap-anydpi-v26`（自适应图标，背景色 `#ECE6D9`）。
+
+## macOS 菜单栏模式（v0.1.4）
+
+macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
+
+- 菜单栏出现单色模板图标（`assets/tray/tray_icon.png` 18px / `tray_icon@2x.png` 36px，自动适配深浅色菜单栏）。
+- **左键点击图标**：在图标下方弹出 360×520 小窗：快传拖放区（把文件拖进小窗即可发送为私有）、最新条目（默认「我的私有」，可切「公共」；点击文本=复制，点击文件=下载并在访达显示）、底部按钮：主窗口 / 监听剪贴板 / 设置 / 退出。失焦自动隐藏，右上角图钉可固定。
+- **右键点击图标**：菜单「打开主窗口 / 快传 / 监听剪贴板 / 设置 / 退出」。
+- **关闭窗口 = 隐藏**，App 继续运行（WebSocket 与本地通知照常工作；窗口隐藏时新内容一定会弹通知）。
+- 设置页（仅 macOS）：「在 Dock 显示图标」开关（关闭后仅菜单栏，运行时切换，无需 LSUIElement）与「开机自启」（`SMAppService`，macOS 13+；**未签名 App 可能被系统拒绝**，失败时会提示，可到「系统设置 → 通用 → 登录项」手动添加）。
+- 限制：`tray_manager` 不支持把文件直接拖到菜单栏图标上，请先点开小窗再拖入。
