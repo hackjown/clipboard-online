@@ -48,3 +48,10 @@ const kDirectionLabels = {'both': '双向', 'send': '只发送', 'recv': '只接
 
 bool directionSends(String d) => d == 'both' || d == 'send';
 bool directionReceives(String d) => d == 'both' || d == 'recv';
+
+class DeviceList {
+  DeviceList({required this.devices, required this.user, required this.instance});
+  final List<SyncDevice> devices;
+  final String user; // 服务器认定的账号
+  final String instance; // 服务器实例 ID（每份数据目录一个）：几台设备应当一致
+}

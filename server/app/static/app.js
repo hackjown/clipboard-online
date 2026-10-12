@@ -1005,6 +1005,7 @@
   let clipView = null;
   function openClipSync() {
     const list = h('ul', { class: 'devlist' });
+    const instLine = h('p', { class: 'hint', text: '' });
     const latestBox = h('div', { class: 'preview mono', text: '加载中…' });
     const latestMeta = h('p', { class: 'hint', text: '' });
     let latestText = '';
@@ -1031,11 +1032,12 @@
         list.replaceChildren(...(d.devices.length ? d.devices.map((x) => h('li', { class: 'dev' },
           h('span', { class: 'dot ' + (x.online ? 'on' : 'off'), title: x.online ? '在线' : '离线' }),
           h('span', { class: 'dev-main' }, h('b', { text: x.name + (x.current ? '（本机）' : '') }),
-            h('small', { text: `${PLAT_LABEL[x.platform] || x.platform || '未知'} · ${DIR_LABEL[x.direction] || x.direction}${x.last_seen ? ' · ' + fmtTime(x.last_seen) : ''}` })),
+            h('small', { text: `${PLAT_LABEL[x.platform] || x.platform || '未知'} · ${DIR_LABEL[x.direction] || x.direction} · ${x.online ? '在线' : '离线' + (x.last_seen ? '（上次在线 ' + fmtTime(x.last_seen) + '）' : '') + (x.platform === 'ios' || x.platform === 'android' ? ' · 手机只在打开 App 时在线' : '')}` })),
           h('button', { type: 'button', class: 'btn sm btn--ghost', onclick: async () => {
             if (!confirm(`移除设备「${x.name}」？它下次开启同步时会重新出现。`)) return;
             try { await api('/api/devices/' + encodeURIComponent(x.device_id), { method: 'DELETE' }); load(); } catch (e) { toast(e.message, 'err'); }
           } }, '移除'))) : [h('li', { class: 'hint', text: '还没有设备开启同步。在 Mac / iPhone / Android 客户端的「设置 → 多设备剪贴板同步」里打开。' })]));
+        instLine.textContent = `账号 ${d.user || '—'} · 服务器实例 ${d.instance || '—'} · 实时连接 ${state.ws ? '已连接' : '未连接'}（各设备的账号与实例须一致）`;
         latestText = (c.clip && c.clip.text) || '';
         latestBox.textContent = latestText ? latestText.slice(0, 400) + (latestText.length > 400 ? '…' : '') : '（还没有同步过内容）';
         latestMeta.textContent = c.clip ? `来自「${c.clip.origin_name}」 · ${fmtTime(c.clip.ts)}` : '';
@@ -1046,7 +1048,7 @@
     showSheet('clipsync', h('div', {}, h('h2', { id: 'sheetTitle', text: '多设备剪贴板同步' }),
       h('p', { class: 'lead', text: '在一台设备上复制，其他设备的剪贴板自动更新（客户端里按设备开关、可选方向）。浏览器无法后台监听剪贴板，这里可以手动发送 / 复制。' }),
       h('p', { class: 'hint', text: '当前同步剪贴板' }), latestBox, h('div', { class: 'row-between' }, latestMeta, copyBtn),
-      h('p', { class: 'hint', text: '我的设备' }), list,
+      h('p', { class: 'hint', text: '我的设备' }), instLine, list,
       h('p', { class: 'hint', text: '发送' }), ta, h('div', { class: 'btn-row' }, readBtn, sendBtn)));
     load();
   }
@@ -1105,7 +1107,7 @@
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.13` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.14` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 

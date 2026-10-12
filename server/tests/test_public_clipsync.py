@@ -190,3 +190,51 @@ def test_expiry_capped_and_config_presets(c):
     assert [p["sec"] for p in cfg["expiry_presets"]] == [3600, 86400, 604800, 2592000, 0]
 
 
+
+
+# ---------- v0.1.14：心跳 / 实例 ID / 跨设备可见 ----------
+def test_ws_ping_pong_and_hello_device(c):
+    c.put(f"/api/devices/{D1}", json={"name": "Mac"})
+    with c.websocket_connect(f"/ws?device={D1}") as ws:
+        h = ws.receive_json()
+        assert h["type"] == "hello" and h["device"] == D1 and h["user_id"]
+        ws.send_text("ping")
+        assert ws.receive_json()["type"] == "pong"
+
+
+def test_instance_id_stable_and_in_devices(tmp_path):
+    app1 = create_app(data_dir=str(tmp_path), allow_register=True)
+    with TestClient(app1) as cl:
+        cl.post("/api/register", json={"username": "alice", "password": "pass1234"})
+        i1 = cl.get("/api/version").json()["instance"]
+        d = cl.get("/api/devices").json()
+        assert d["instance"] == i1 and d["user"] == "alice" and len(i1) == 8
+    with TestClient(create_app(data_dir=str(tmp_path), allow_register=True)) as cl2:
+        assert cl2.get("/api/version").json()["instance"] == i1  # 同一数据目录：实例 ID 不变
+    other = tmp_path / "other"
+    with TestClient(create_app(data_dir=str(other), allow_register=True)) as cl3:
+        assert cl3.get("/api/version").json()["instance"] != i1  # 另一份数据：不同
+
+
+def test_three_devices_same_account_see_each_other_and_ios_to_mac(c):
+    """复现用户场景：Mac 在线收、iOS 发、Android 登记；同账号同实例时三台互相可见，Mac 收到 iOS 的复制。"""
+    mac, ios, android = "m" * 32, "i" * 32, "a" * 32
+    for d, n, plat in ((mac, "我的 Mac", "macos"), (ios, "tuo的 iPhone", "ios"), (android, "zumin的 Android", "android")):
+        assert c.put(f"/api/devices/{d}", json={"name": n, "platform": plat, "direction": "both"}, headers={"X-Device-Id": d}).status_code == 200
+    names_from_mac = {x["name"] for x in c.get("/api/devices", headers={"X-Device-Id": mac}).json()["devices"]}
+    assert names_from_mac == {"我的 Mac", "tuo的 iPhone", "zumin的 Android"}
+    with c.websocket_connect(f"/ws?device={mac}") as ws:
+        ws.receive_json()
+        c.post("/api/clipsync", json={"text": "iOS 复制"}, headers={"X-Device-Id": ios})
+        got = [ws.receive_json(), ws.receive_json()]
+        assert any(e["type"] == "clip" and e["text"] == "iOS 复制" and e["origin"] == ios for e in got)
+    # 断线期间错过推送 → 客户端重连后 GET /api/clipsync 能补到
+    assert c.get("/api/clipsync").json()["clip"]["text"] == "iOS 复制"
+
+
+def test_other_account_does_not_see_devices(c):
+    c.put(f"/api/devices/{D1}", json={"name": "Mac"})
+    c.post("/api/logout")
+    c.post("/api/register", json={"username": "zumin2", "password": "pass1234"})
+    c.put(f"/api/devices/{D2}", json={"name": "Android"})
+    assert [d["name"] for d in c.get("/api/devices").json()["devices"]] == ["Android"]  # 账号不同 = 互不可见（用户现场现象）

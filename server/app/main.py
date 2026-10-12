@@ -636,6 +636,17 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
                max_upload_mb: Optional[int] = None, bark_allow_private: Optional[bool] = None) -> FastAPI:
     data_path = Path(data_dir or os.environ.get("CLIP_DATA_DIR") or (BASE_DIR.parent / "data"))
     store = Store(data_path)
+    # 实例 ID：每个数据目录一个（持久化），用于在客户端「同步状态」里确认几台设备连的是不是同一个服务器 / 同一份数据
+    try:
+        _iid_path = Path(data_path) / "instance_id"
+        if _iid_path.exists():
+            instance_id = _iid_path.read_text().strip()[:16]
+        else:
+            Path(data_path).mkdir(parents=True, exist_ok=True)
+            instance_id = secrets.token_hex(4)
+            _iid_path.write_text(instance_id)
+    except Exception:  # noqa: BLE001
+        instance_id = "unknown"
     hub = Hub()
     allow_reg = allow_register if allow_register is not None else _env_bool("CLIP_REGISTER", True)
     max_upload = (max_upload_mb if max_upload_mb is not None else _env_int("CLIP_MAX_UPLOAD_MB", 200)) * 1024 * 1024
@@ -761,7 +772,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
 
     @app.get("/api/version")
     def api_version():
-        return {"version": VERSION, "features": FEATURES}
+        return {"version": VERSION, "features": FEATURES, "instance": instance_id}
 
     @app.get("/api/me")
     def me(request: Request):
@@ -1579,7 +1590,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         cur = _dev_id(request)
         devs = [_dev_public(k, v, online, cur) for k, v in store.get_devices(me["id"]).items()]
         devs.sort(key=lambda d: (not d["current"], not d["online"], -(d["last_seen"] or 0)))
-        return {"ok": True, "devices": devs}
+        return {"ok": True, "devices": devs, "user": me["username"], "instance": instance_id,
+                "online_count": len(online)}
 
     @app.put("/api/devices/{device_id}")
     async def put_device(device_id: str, request: Request):
@@ -1682,13 +1694,20 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         dev = (ws.query_params.get("device") or "").strip()
         await hub.connect(ws, uid, dev if DEVICE_RE.match(dev) else "")
         try:
-            await ws.send_json({"type": "hello", "user_id": uid})
+            await ws.send_json({"type": "hello", "user_id": uid, "device": dev if DEVICE_RE.match(dev) else ""})
             while True:
-                # keep alive / ignore client msgs
-                await ws.receive_text()
+                # 心跳：客户端每 ~20 秒发 "ping"，服务器回 pong；客户端据此发现「看似连着、实际已断」的半开连接并重连
+                msg = await ws.receive_text()
+                if msg.strip().lower() in ("ping", '{"type":"ping"}'):
+                    try:
+                        await asyncio.wait_for(ws.send_json({"type": "pong", "ts": time.time()}), timeout=5)
+                    except Exception:
+                        break
         except WebSocketDisconnect:
-            hub.disconnect(ws)
+            pass
         except Exception:
+            pass
+        finally:
             hub.disconnect(ws)
 
     @app.exception_handler(HTTPException)

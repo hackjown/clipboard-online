@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/sync.dart';
 import '../services/api.dart';
 import '../services/clip_sync.dart';
+import '../services/ws_sync.dart';
 import '../theme/ink_theme.dart';
 
 /// 设置页：多设备剪贴板同步（本机开关 / 方向 / 名称 + 我的设备列表）
@@ -20,6 +22,9 @@ class ClipSyncSection extends StatefulWidget {
 class _ClipSyncSectionState extends State<ClipSyncSection> {
   final _name = TextEditingController();
   List<SyncDevice>? _devices;
+  String _user = '';
+  String _instance = '';
+  Timer? _auto;
   String? _err;
   bool _busy = false;
 
@@ -34,10 +39,12 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
       setState(() {});
     });
     _loadDevices();
+    _auto = Timer.periodic(const Duration(seconds: 10), (_) => _loadDevices()); // 设备列表自动刷新
   }
 
   @override
   void dispose() {
+    _auto?.cancel();
     _name.dispose();
     super.dispose();
   }
@@ -45,7 +52,7 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
   Future<void> _loadDevices() async {
     try {
       final d = await widget.api.listDevices();
-      if (mounted) setState(() { _devices = d; _err = null; });
+      if (mounted) setState(() { _devices = d.devices; _user = d.user; _instance = d.instance; _err = null; });
     } catch (e) {
       if (mounted) setState(() => _err = '$e');
     }
@@ -67,6 +74,64 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
     }
     if (Platform.isAndroid) return 'Android 10+ 限制：只有前台 App 能读剪贴板，因此回到 App 时同步一次；App 在前台时实时接收。';
     return '';
+  }
+
+  String _t(DateTime? d) {
+    if (d == null) return '—';
+    String two(int x) => x.toString().padLeft(2, '0');
+    final ago = DateTime.now().difference(d);
+    final rel = ago.inSeconds < 60 ? '${ago.inSeconds} 秒前' : (ago.inMinutes < 60 ? '${ago.inMinutes} 分钟前' : '${ago.inHours} 小时前');
+    return '${two(d.hour)}:${two(d.minute)}:${two(d.second)}（$rel）';
+  }
+
+  /// 同步状态：现场排查用（截图发给开发者即可）
+  Widget _statusBox(InkTokens t) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([_cs.statusTick, WsSync.status]),
+      builder: (context, _) {
+        final st = _cs.status;
+        final dev = widget.api.deviceId;
+        final rows = <(String, String)>[
+          ('服务器', widget.api.base),
+          ('账号', _user.isEmpty ? '—' : _user),
+          ('服务器实例', _instance.isEmpty ? '—（服务器早于 0.1.14）' : _instance),
+          ('本机设备 ID', dev.length > 8 ? '${dev.substring(0, 8)}…' : dev),
+          ('实时连接', WsSync.status.value),
+          ('设备登记', st.registerError != null ? '失败：${st.registerError}' : '${_t(st.registeredAt)} ${st.registerConfirm ?? ''}'),
+          ('上次发送', st.sentAt == null ? '—' : '${_t(st.sentAt)} ${st.sentPreview ?? ''}'),
+          ('上次接收', st.receivedAt == null ? '—' : '${_t(st.receivedAt)} 来自 ${st.receivedFrom ?? ''}'),
+          ('上次拉取', _t(st.polledAt)),
+          if (st.resumeReadAt != null) ('回前台读剪贴板', '${_t(st.resumeReadAt)} ${st.resumeRead ?? ''}'),
+          ('最近错误', st.lastError == null ? '无' : '${_t(st.lastErrorAt)} ${st.lastError}'),
+        ];
+        return Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: t.paper2,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: t.line, width: 2),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('同步状态', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            for (final r in rows)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: '${r.$1}：', style: TextStyle(color: t.muted)),
+                    TextSpan(text: r.$2),
+                  ]),
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                ),
+              ),
+            const SizedBox(height: 4),
+            Text('几台设备的「服务器实例」和「账号」必须一致，否则彼此看不到、也收不到同步。',
+                style: TextStyle(fontSize: 11.5, color: t.muted)),
+          ]),
+        );
+      },
+    );
   }
 
   String _ago(double? ts) {
@@ -153,6 +218,8 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
               : Padding(padding: const EdgeInsets.only(top: 6), child: Text(e, style: TextStyle(color: t.accent, fontSize: 12))),
         ),
         const SizedBox(height: 12),
+        _statusBox(t),
+        const SizedBox(height: 12),
         Row(children: [
           const Expanded(child: Text('我的设备', style: TextStyle(fontWeight: FontWeight.w700))),
           IconButton(onPressed: _loadDevices, icon: const Icon(Icons.refresh), tooltip: '刷新'),
@@ -185,7 +252,7 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('${d.name}${d.current ? '（本机）' : ''}', style: const TextStyle(fontWeight: FontWeight.w700)),
                   Text(
-                    '${d.platform} · ${kDirectionLabels[d.direction] ?? d.direction}${d.online ? ' · 在线' : (d.lastSeen != null ? ' · ${_ago(d.lastSeen)}' : '')}',
+                    '${d.platform} · ${kDirectionLabels[d.direction] ?? d.direction} · ${d.online ? '在线' : '离线${d.lastSeen != null ? '（上次在线 ${_ago(d.lastSeen)}）' : ''}${d.platform == 'ios' || d.platform == 'android' ? ' · 手机只在打开 App 时在线' : ''}'}',
                     style: TextStyle(fontSize: 12, color: t.muted),
                   ),
                 ]),

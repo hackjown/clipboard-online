@@ -65,6 +65,22 @@ class EchoGuard {
   bool isCurrent(String text) => text == _lastSeen;
 }
 
+/// 现场排查用的同步状态（设置页「同步状态」显示）
+class ClipSyncStatus {
+  DateTime? registeredAt;
+  String? registerError;
+  String? registerConfirm;
+  DateTime? sentAt;
+  String? sentPreview;
+  DateTime? receivedAt;
+  String? receivedFrom;
+  DateTime? polledAt;
+  DateTime? resumeReadAt;
+  String? resumeRead; // 回到前台时读剪贴板的结果
+  String? lastError;
+  DateTime? lastErrorAt;
+}
+
 /// 多设备剪贴板同步（思路参考 lanecho，MIT；本项目为服务器中转 + WebSocket 的独立实现）。
 ///
 /// * macOS：开启后每秒检查一次系统剪贴板，变化即发送（App 在后台 / 菜单栏也有效）。
@@ -83,8 +99,26 @@ class ClipSync {
   /// 最近一次错误（设置页显示）
   final ValueNotifier<String?> lastError = ValueNotifier(null);
 
+  final ClipSyncStatus status = ClipSyncStatus();
+
+  /// 状态有变化时 +1（UI 监听）
+  final ValueNotifier<int> statusTick = ValueNotifier(0);
+  void _touch() => statusTick.value++;
+  void _err(String e) {
+    lastError.value = e;
+    status.lastError = e;
+    status.lastErrorAt = DateTime.now();
+    _touch();
+  }
+
+  /// 首页把 WebSocket 是否连着告诉这里（决定轮询频率）
+  bool Function() wsConnected = () => false;
+
   ClipApi? _api;
   Timer? _timer;
+  Timer? _heartbeat;
+  Timer? _pollTimer;
+  DateTime _lastPoll = DateTime.fromMillisecondsSinceEpoch(0);
   bool _busy = false;
   double _lastAppliedTs = 0;
   final EchoGuard _guard = EchoGuard();
@@ -148,7 +182,32 @@ class ClipSync {
   void detach() {
     _timer?.cancel();
     _timer = null;
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    _pollTimer?.cancel();
+    _pollTimer = null;
     _api = null;
+  }
+
+  /// WebSocket 重新连上：可能错过了断线期间的推送，补拉一次最新内容
+  Future<void> onReconnect() async {
+    await _register();
+    await _pollOnce();
+  }
+
+  Future<void> _pollOnce() async {
+    final api = _api;
+    final s = settings.value;
+    if (api == null || !s.enabled || !directionReceives(s.direction)) return;
+    _lastPoll = DateTime.now();
+    try {
+      final c = await api.getClip();
+      status.polledAt = DateTime.now();
+      _touch();
+      if (c != null && c.origin != api.deviceId) await _apply(c);
+    } catch (e) {
+      _err('拉取最新同步内容失败：$e');
+    }
   }
 
   Future<void> _register() async {
@@ -163,12 +222,36 @@ class ClipSync {
         direction: s.enabled ? s.direction : 'off',
       );
       lastError.value = null;
+      status.registeredAt = DateTime.now();
+      status.registerError = null;
+      // 回读确认：服务器上确实有这台设备，并记下服务器上一共几台（与其他设备对比）
+      try {
+        final l = await api.listDevices();
+        final mine = l.devices.any((d) => d.id == api.deviceId);
+        status.registerConfirm = '${mine ? '服务器已确认' : '服务器列表里没有本机！'}，共 ${l.devices.length} 台：'
+            '${l.devices.map((d) => d.name).join('、')}';
+      } catch (e) {
+        status.registerConfirm = '回读设备列表失败：$e';
+      }
+      _touch();
     } catch (e) {
-      lastError.value = '$e';
+      status.registerError = '$e';
+      _err('设备登记失败：$e');
     }
   }
 
   void _restart() {
+    _heartbeat?.cancel();
+    _pollTimer?.cancel();
+    if (_api != null) {
+      // 每 60 秒登记一次：刷新「最近在线」时间；登记失败会出现在同步状态里
+      _heartbeat = Timer.periodic(const Duration(seconds: 60), (_) => _register());
+      // 兜底轮询：WebSocket 断开时每 5 秒、连着时每 30 秒拉一次最新同步内容（防半开连接丢推送）
+      _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        final gap = DateTime.now().difference(_lastPoll);
+        if (gap >= (wsConnected() ? const Duration(seconds: 30) : const Duration(seconds: 5))) _pollOnce();
+      });
+    }
     _timer?.cancel();
     _timer = null;
     final s = settings.value;
@@ -210,8 +293,11 @@ class ClipSync {
     try {
       await api.postClip(text, saveHistory: s.saveHistory);
       lastError.value = null;
+      status.sentAt = DateTime.now();
+      status.sentPreview = text.length > 30 ? '${text.substring(0, 30)}…' : text;
+      _touch();
     } catch (e) {
-      lastError.value = '$e';
+      _err('发送失败：$e');
     }
   }
 
@@ -237,8 +323,12 @@ class ClipSync {
     try {
       await Clipboard.setData(ClipboardData(text: clip.text));
       lastApplied.value = clip;
+      status.receivedAt = DateTime.now();
+      status.receivedFrom = clip.originName;
+      _touch();
       return true;
-    } catch (_) {
+    } catch (e) {
+      _err('写入本机剪贴板失败：$e');
       return false;
     }
   }
@@ -250,7 +340,18 @@ class ClipSync {
     final s = settings.value;
     if (api == null || !s.enabled) return;
     if (directionSends(s.direction) && !canPoll) {
-      final t = await _readLocal();
+      // Android 10+ 只有拿到窗口焦点后才能读剪贴板；resumed 回调往往早于焦点 → 稍等再读，读不到再试一次
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      var t = await _readLocal();
+      if (t == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        t = await _readLocal();
+      }
+      status.resumeReadAt = DateTime.now();
+      status.resumeRead = t == null
+          ? '读不到（系统拒绝或剪贴板为空${!kIsWeb && Platform.isIOS ? '；iOS 请在「允许粘贴」中选允许' : ''}）'
+          : (_guard.isCurrent(t) ? '无新内容' : '有新内容 → 发送');
+      _touch();
       if (t != null && !_guard.isCurrent(t)) {
         await _maybeSend(t);
         return; // 本机的复制是最新的

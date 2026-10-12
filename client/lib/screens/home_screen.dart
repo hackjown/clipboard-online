@@ -101,7 +101,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (_tabs.index == 1) Notifier.instance.clearUnread();
       }
     });
-    _ws = WsSync(widget.api)..onEvent = _onWsEvent;
+    _ws = WsSync(widget.api)
+      ..onEvent = _onWsEvent
+      ..onHello = () {
+        _refresh(silent: true); // 断线期间可能错过事件
+        ClipSync.instance.onReconnect();
+      };
+    ClipSync.instance.wsConnected = () => _ws.connected;
     WidgetsBinding.instance.addObserver(this);
     Notifier.instance.clearUnread();
     _ws.start();

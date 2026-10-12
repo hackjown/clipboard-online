@@ -114,10 +114,14 @@ class ClipApi {
   }
 
   // ---- 多设备剪贴板同步（设备列表 / 当前同步内容）----
-  Future<List<SyncDevice>> listDevices() async {
+  Future<DeviceList> listDevices() async {
     final r = await http.get(_u('/api/devices'), headers: _authHeaders);
     final j = await _json(r);
-    return [for (final d in (j['devices'] as List? ?? const [])) SyncDevice.fromJson(Map<String, dynamic>.from(d as Map))];
+    return DeviceList(
+      devices: [for (final d in (j['devices'] as List? ?? const [])) SyncDevice.fromJson(Map<String, dynamic>.from(d as Map))],
+      user: (j['user'] ?? '').toString(),
+      instance: (j['instance'] ?? '').toString(),
+    );
   }
 
   Future<void> putDevice({required String name, required String platform, required String direction}) async {

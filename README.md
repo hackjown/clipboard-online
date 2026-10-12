@@ -147,3 +147,12 @@ git push -u origin main
 
 - **Web 文件预览**：图片（缩放、上一张/下一张）、视频 / 音频（HTTP Range，206）、PDF（iframe）、文本 / 代码 / JSON（前 200KB，纯文本渲染）；分享页 `/s/<token>` 同样可预览。内联端点 `GET /download/<name>?inline=1`、`GET /s/<token>/file?inline=1` 仅对白名单类型内联，**html / svg / js 等一律强制下载**，并带 `nosniff` 与 CSP sandbox；私有 / 过期规则不变。
 - **客户端**：「纸与墨」主题、媒体预览、新图标、macOS 菜单栏模式，详见 `client/README.md`。
+
+## v0.1.14 — 剪贴板同步可靠性
+
+- WebSocket 心跳（20s ping / 50s 无消息重连），收到 hello 才算“已连接”；重连后自动补拉最新剪贴板
+- 无 WS 时每 5s 轮询兜底（连上时 30s），设备登记每 60s 心跳并回读确认
+- Android 回前台等待窗口焦点后再读剪贴板（重试一次）；Android 允许明文 http
+- 设置页新增同步状态面板：服务器 / 账号 / 服务器实例 / 本机设备 ID / 实时连接 / 上次发送、接收、拉取 / 最近错误
+- 服务器 `/api/version`、`/api/devices` 返回实例 ID；离线文案更清楚（手机只在打开 App 时在线）
+
