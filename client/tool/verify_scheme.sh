@@ -11,4 +11,4 @@ if /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" "$plist" | tee /dev/stde
 else
   echo "ERROR: Info.plist 里没有 clipboard scheme"; [ -n "$work" ] && rm -rf "$work"; exit 1
 fi
-[ -n "$work" ] && rm -rf "$work"
+if [ -n "$work" ]; then rm -rf "$work"; fi
