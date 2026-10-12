@@ -85,7 +85,11 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.10）
+## 本版新增（v0.1.11）
+
+- 修复 v0.1.10 macOS CI 失败：`verify_scheme.sh` 校验 .app 时末行 `[ -n "$work" ] && rm` 返回 1 导致脚本退出码 1（v0.1.10 无 Release）。功能同 v0.1.10。
+
+## v0.1.10
 
 - **点 Bark 推送直接打开 App**：推送的 `url` 参数现在是深链 `clipboard://item/<uuid>`（测试推送 / 无条目时是 `clipboard://home/private`），Bark 支持自定义 URL scheme，所以点推送会进「剪贴板」App 而不是浏览器。App 收到后：切到「我的私有」→ 刷新 → 滚动到并高亮该条；图片 / 视频 / PDF / 压缩包会自动打开预览。冷启动（App 没在运行）和已在运行都支持（冷启动时链接先挂起，首页出现后处理；还没登录则登录后处理；macOS 会把窗口带到前台；已打开的子页面会先返回首页）。
 - **可开关**：Bark 设置新增 `open_in_app`（默认开）。Web「账号菜单 → Bark 推送」和客户端「设置 → 点击推送打开 App」都能关；关闭后保持旧行为——推送里是网站的 https 链接。`GET/PUT /api/settings/bark` 返回 / 接收 `open_in_app`（PUT 不带该字段则保持原值）。
