@@ -202,6 +202,14 @@ def test_public_scope_add_and_upload_go_public(page, server):
     page.evaluate("window.__clip.setScope('public', {force:true})")
     page.evaluate("window.__clip.openAdd('text')")
     page.wait_for_selector(".vistog-btn[data-vis=public][aria-checked=true]")
+    labels = page.eval_on_selector_all(".exprow button", "els => els.map(e => e.textContent)")
+    assert labels == ["1小时", "1天", "7天", "30天", "永不过期"]
+    assert page.inner_text(".exprow button[aria-checked=true]") == "1天"  # 公共默认 1 天
+    page.wait_for_timeout(500)
+    page.eval_on_selector(".vistog-btn[data-vis=private]", "e => e.click()")
+    assert page.inner_text(".exprow button[aria-checked=true]") == "永不过期"  # 私有默认永不过期
+    page.eval_on_selector(".vistog-btn[data-vis=public]", "e => e.click()")
+    page.evaluate("() => [...document.querySelectorAll('.exprow button')].find((b) => b.textContent === '7天').click()")
     page.fill("textarea.ta", "公共区回归文本")
     page.keyboard.press("Control+Enter")
     page.wait_for_function("() => document.body.innerText.includes('公共区回归文本')")
@@ -214,3 +222,6 @@ def test_public_scope_add_and_upload_go_public(page, server):
     items = api(server, "/api/items?scope=public")[0]["items"]
     vis = {(i.get("content") or i.get("filename")): i["visibility"] for i in items}
     assert vis.get("公共区回归文本") == "public" and vis.get("pub-reg.txt") == "public"
+    exp = {(i.get("content") or i.get("filename")): i["expires_at"] for i in items}
+    import time as _t
+    assert 6.9 * 86400 < exp["公共区回归文本"] - _t.time() <= 7 * 86400  # 选了 7 天

@@ -307,8 +307,8 @@
             refreshScoped();
           } catch (e) { toast(e.message, 'err'); }
         } }, icon('pin'));
-      const share = h('button', { type: 'button', class: 'share-btn', title: '分享', onclick: () => openShare(it) }, icon('share'));
-      const tagb = h('button', { type: 'button', class: 'tag-btn', title: '标签', onclick: () => openTags(it) }, icon('tag'));
+      const share = h('button', { type: 'button', class: 'share-btn' + (it.has_share ? ' on' : ''), title: it.has_share ? '分享（已开启）' : '分享', onclick: () => openShare(it) }, icon('share'));
+      const tagb = h('button', { type: 'button', class: 'tag-btn' + ((it.tags || []).length ? ' on' : ''), title: '标签', onclick: () => openTags(it) }, icon('tag'));
       tools.append(pin, share, tagb);
     }
     if (tools.childNodes.length) art.append(tools);
@@ -644,11 +644,11 @@
   }
 
   function expiryPicker(vis) {
-    const presets = [{ sec: 0, label: '不过期' }, { sec: 3600, label: '1 小时' }, { sec: 86400, label: '24 小时' }, { sec: 604800, label: '7 天' }];
+    const presets = [{ sec: 3600, label: '1小时' }, { sec: 86400, label: '1天' }, { sec: 604800, label: '7天' }, { sec: 2592000, label: '30天' }, { sec: 0, label: '永不过期' }];
     const def = vis === 'public' ? 86400 : 0;
     const wrap = h('div', { class: 'exprow', role: 'radiogroup', 'aria-label': '过期时间' });
     wrap.dataset.sec = String(def);
-    const hint = h('p', { class: 'hint', text: vis === 'public' ? '公共默认 24 小时后自动删除' : '私有默认永不过期' });
+    const hint = h('p', { class: 'hint', text: vis === 'public' ? '公共默认 1 天后自动删除，可改选' : '私有默认永不过期' });
     presets.forEach((p) => {
       const b = h('button', { type: 'button', 'aria-checked': String(p.sec === def), text: p.label, onclick: () => {
         wrap.dataset.sec = String(p.sec);
@@ -662,7 +662,7 @@
       wrap.dataset.sec = String(sec);
       const label = presets.find((p) => p.sec === sec).label;
       $$('button', wrap).forEach((x) => x.setAttribute('aria-checked', String(x.textContent === label)));
-      hint.textContent = v === 'public' ? '公共默认 24 小时后自动删除' : '私有默认永不过期';
+      hint.textContent = v === 'public' ? '公共默认 1 天后自动删除，可改选' : '私有默认永不过期';
     };
     box.getSec = () => parseInt(wrap.dataset.sec || '0', 10);
     return box;
@@ -1105,7 +1105,7 @@
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.12` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.13` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 

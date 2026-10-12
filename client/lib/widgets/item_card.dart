@@ -212,17 +212,23 @@ class ItemCard extends StatelessWidget {
               if (onReveal != null)
                 InkButton(label: '在访达中显示', icon: Icons.folder_open, onPressed: onReveal),
               if (onShareLink != null)
-                InkIconButton(icon: Icons.qr_code_2, tooltip: '链接 / 二维码', onPressed: onShareLink),
+                InkIconButton(
+                  icon: Icons.qr_code_2,
+                  color: _act(t.dark, 'share', item.hasShare),
+                  tooltip: item.hasShare ? '链接 / 二维码（已开启分享）' : '链接 / 二维码',
+                  onPressed: onShareLink,
+                ),
               if (onFavorite != null)
                 InkIconButton(
                   icon: item.favorite ? Icons.star_rounded : Icons.star_border_rounded,
-                  color: item.favorite ? const Color(0xFFE0A800) : null,
+                  color: _act(t.dark, 'star', item.favorite),
                   tooltip: '收藏',
                   onPressed: onFavorite,
                 ),
               if (onPin != null && item.mine)
                 InkIconButton(
                   icon: item.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                  color: _act(t.dark, 'pin', item.pinned),
                   tooltip: '置顶',
                   onPressed: onPin,
                 ),
@@ -264,4 +270,14 @@ class _FileTile extends StatelessWidget {
       child: Icon(icon, size: 28, color: InkTokens.onColor),
     );
   }
+}
+
+
+/// 操作图标配色（只给图标上色，按钮底色 / 边框不变；与网页一致）：
+/// 收藏琥珀 / 置顶珊瑚红 / 分享蓝 / 标签青绿；未激活略淡（描边图标），激活满色（实心图标）。
+Color _act(bool dark, String kind, bool on) {
+  const light = {'star': Color(0xFFB97F00), 'pin': Color(0xFFD9432B), 'share': Color(0xFF2C6BD1), 'tag': Color(0xFF0F8A78)};
+  const darkC = {'star': Color(0xFFF5C542), 'pin': Color(0xFFFF7A5C), 'share': Color(0xFF74A9FF), 'tag': Color(0xFF38C9AE)};
+  final c = (dark ? darkC : light)[kind]!;
+  return on ? c : c.withValues(alpha: 0.78);
 }

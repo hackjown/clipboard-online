@@ -65,6 +65,15 @@ private enum ShareStore {
         return nil
     }
 
+    /// App 设置里选的「分享扩展默认有效期」（秒，0 = 永不过期）；App Group 不可用时为 0
+    static var expiresIn: Int {
+        guard let g = groupContainer,
+              let data = try? Data(contentsOf: g.appendingPathComponent("share_prefs.json")),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let n = obj["expires_in"] as? NSNumber else { return 0 }
+        return max(0, n.intValue)
+    }
+
     static func saveLocal(_ c: Config) {
         let d = UserDefaults.standard
         d.set(c.base, forKey: "ext_base")
@@ -826,7 +835,7 @@ final class ShareViewController: UIViewController {
             done(.failure(UploadError(message: "服务器地址无效：\(cfg.base)", status: 0)))
             return
         }
-        let body = (try? JSONSerialization.data(withJSONObject: ["content": text, "visibility": "private", "expires_in": 0])) ?? Data()
+        let body = (try? JSONSerialization.data(withJSONObject: ["content": text, "visibility": "private", "expires_in": ShareStore.expiresIn])) ?? Data()
         let client = MiniHTTPClient(url: url, method: "POST",
                                     headers: ["Authorization": "Bearer \(cfg.token)",
                                               "Content-Type": "application/json; charset=utf-8",
@@ -848,7 +857,7 @@ final class ShareViewController: UIViewController {
         let safeName = name.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
         var pre = Data()
         pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"visibility\"\r\n\r\nprivate\r\n"))
-        pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"expires_in\"\r\n\r\n0\r\n"))
+        pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"expires_in\"\r\n\r\n\(ShareStore.expiresIn)\r\n"))
         pre.append(s("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mime)\r\n\r\n"))
         let post = s("\r\n--\(boundary)--\r\n")
         // 文件按 256KB 分块从磁盘流式发送，不会整体读入内存

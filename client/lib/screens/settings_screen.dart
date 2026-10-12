@@ -3,10 +3,12 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_info.dart';
 import '../services/api.dart';
 import '../widgets/clip_sync_section.dart';
+import '../widgets/expiry_picker.dart';
 import '../services/auth_store.dart';
 import '../services/menubar.dart';
 import '../services/share_config.dart';
@@ -27,6 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _bark = TextEditingController();
   bool _barkSkip = true;
   bool _barkOpenInApp = true;
+  int _shareExp = 0;
   bool _barkBusy = false;
   bool? _group;
   String _shareLog = '';
@@ -72,6 +75,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     widget.store.getBaseUrl().then((b) => setState(() => _base.text = b));
     if (ShareConfig.supported) _loadShare();
+    SharedPreferences.getInstance().then((sp) {
+      if (mounted) setState(() => _shareExp = sp.getInt(kShareExpiryKey) ?? 0);
+    });
     _loadBark();
     widget.api.fetchServerVersion().then((_) {
       if (mounted) setState(() => _verLoaded = true);
@@ -195,6 +201,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : 'Android：快传选文件；其它 App「分享到剪贴板」；条目「分享」可转出到微信等。',
             ),
           ),
+          if (isIOS) ...[
+            const SizedBox(height: 12),
+            const Text('分享扩展默认有效期', style: TextStyle(fontWeight: FontWeight.w700)),
+            const Text('从微信 / 相册等「分享到剪贴板」时没有地方选有效期，按这里的设置上传（私有）。', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 4),
+            ExpiryPicker(
+              label: '',
+              value: _shareExp,
+              onChanged: (v) async {
+                setState(() => _shareExp = v);
+                final sp = await SharedPreferences.getInstance();
+                await sp.setInt(kShareExpiryKey, v);
+                await ShareConfig.setExpiry(v);
+              },
+            ),
+          ],
           const Divider(height: 32),
           ClipSyncSection(api: widget.api),
           const Divider(height: 32),

@@ -509,8 +509,16 @@ textarea.ta::placeholder { color: var(--muted); }
   width: 44px; height: 44px; border-radius: 12px; border: var(--line); background: var(--paper);
   display: grid; place-items: center; box-shadow: var(--sh-sm); flex: none;
 }
-.star-btn.on { background: var(--sun); }
-.pin-btn.on { background: var(--lime); }
+/* v0.1.13：只给图标本身上色（按钮底色 / 边框不变）—— 收藏琥珀 / 置顶珊瑚红 / 分享蓝 / 标签青绿；
+   未激活：彩色描边、略淡；激活：实心填充、满色、描边加粗。浅色 / 深色各一套。 */
+.star-btn  .ico { color: var(--act-star); }
+.pin-btn   .ico { color: var(--act-pin); }
+.share-btn .ico { color: var(--act-share); }
+.tag-btn   .ico { color: var(--act-tag); }
+.star-btn:not(.on) .ico, .pin-btn:not(.on) .ico, .share-btn:not(.on) .ico, .tag-btn:not(.on) .ico { opacity: .78; }
+.star-btn.on svg, .pin-btn.on svg, .tag-btn.on svg { fill: currentColor; }
+.share-btn.on svg { stroke-width: 3; }
+.share-btn.on svg circle { fill: currentColor; }
 .card-tools { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
 
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
@@ -640,3 +648,7 @@ body.pv-open { overflow: hidden; }
 .devlist .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--ink); flex: none; }
 .devlist .dot.on { background: #3fa34d; }
 .devlist .dot.off { background: transparent; }
+
+:root { --act-star: #b97f00; --act-pin: #d9432b; --act-share: #2c6bd1; --act-tag: #0f8a78; }
+:root[data-theme="dark"] { --act-star: #f5c542; --act-pin: #ff7a5c; --act-share: #74a9ff; --act-tag: #38c9ae; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --act-star: #f5c542; --act-pin: #ff7a5c; --act-share: #74a9ff; --act-tag: #38c9ae; } }

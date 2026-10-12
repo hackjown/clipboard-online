@@ -131,7 +131,8 @@ def serve_file(path: Path, filename: str, item_mime: Optional[str], inline: bool
     return FileResponse(path, filename=filename, media_type=media, content_disposition_type="attachment", headers=headers)
 
 
-EXPIRY_PRESETS = {0: None, 3600: 3600, 86400: 86400, 604800: 604800}
+EXPIRY_PRESETS = {0: None, 3600: 3600, 86400: 86400, 604800: 604800, 2592000: 2592000}
+EXPIRY_MAX = 366 * 86400  # 自定义秒数上限
 
 def sanitize_filename(name: str | None) -> str:
     name = unicodedata.normalize("NFC", name or "")
@@ -753,8 +754,10 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return {"auth": True, "authed": u is not None, "user": u, "register": allow_reg,
                 "version": VERSION, "features": FEATURES,
                 "max_upload": max_upload, "max_text": max_text,
-                "expiry_presets": [{"sec": 0, "label": "不过期"}, {"sec": 3600, "label": "1 小时"},
-                                   {"sec": 86400, "label": "24 小时"}, {"sec": 604800, "label": "7 天"}]}
+                "expiry_default": {"public": 86400, "private": 0},
+                "expiry_presets": [{"sec": 3600, "label": "1小时"}, {"sec": 86400, "label": "1天"},
+                                   {"sec": 604800, "label": "7天"}, {"sec": 2592000, "label": "30天"},
+                                   {"sec": 0, "label": "永不过期"}]}
 
     @app.get("/api/version")
     def api_version():
@@ -849,12 +852,12 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             sec = int(raw) if raw is not None and raw != "" else (-1)
         except (TypeError, ValueError):
             sec = -1
+        # 未指定（缺省 / 空 / 负数）：公共默认 1 天，私有默认永不过期；0 = 用户明确选择「永不过期」
         if sec < 0:
-            # defaults: public 24h, private never
             sec = 86400 if visibility == "public" else 0
         if sec == 0:
             return None
-        return time.time() + sec
+        return time.time() + min(sec, EXPIRY_MAX)
 
     def public_item(i: dict, me: Optional[dict], meta: Optional[dict] = None) -> dict:
         uid = i["uuid"]

@@ -24,7 +24,7 @@ def mk(c, content="hello", vis="private", **kw):
 
 
 def test_version_and_features(env):
-    assert VERSION == Path(__file__).resolve().parents[1].joinpath("app/VERSION").read_text().strip() == "0.1.12"
+    assert VERSION == Path(__file__).resolve().parents[1].joinpath("app/VERSION").read_text().strip() == "0.1.13"
     for path in ("/api/version", "/api/config"):
         j = env.get(path).json()
         assert j["version"] == VERSION and {"bark", "archive", "edit"} <= set(j["features"])
@@ -49,7 +49,7 @@ def test_owner_can_edit_and_share_token_kept(env):
 def test_edit_visibility_and_expiry(env):
     uid = mk(env, "x", "private")
     r = env.patch(f"/api/items/{uid}", json={"visibility": "public"}).json()["item"]
-    assert r["visibility"] == "public" and r["expires_at"] is not None     # 公共默认 24h
+    assert r["visibility"] == "public" and r["expires_at"] is not None     # 公共默认 1 天
     r = env.patch(f"/api/items/{uid}", json={"expires_in": 0}).json()["item"]
     assert r["expires_at"] is None
     r = env.patch(f"/api/items/{uid}", json={"expires_in": 3600}).json()["item"]

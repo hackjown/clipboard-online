@@ -28,7 +28,7 @@ def guest_public(tmp_client):
 def test_public_text_and_file_upload_visible_to_guests(c):
     r = c.post("/content", json={"content": "公共文本", "visibility": "public"})
     assert r.status_code == 200 and r.json()["visibility"] == "public"
-    assert r.json()["expires_at"] and r.json()["expires_at"] - time.time() > 86000  # 公共默认 24h
+    assert r.json()["expires_at"] and r.json()["expires_at"] - time.time() > 86000  # 公共默认 1 天
     r2 = c.post("/upload_file", data={"visibility": "public", "expires_in": "3600"}, files={"file": ("p.txt", b"pub")})
     assert r2.status_code == 200 and r2.json()["visibility"] == "public"
     # 客户端常见的大小写 / 空白
@@ -154,3 +154,39 @@ def test_clipsync_validation_and_isolation(c):
         c.post("/api/clipsync", json={"text": "bob 的"}, headers={"X-Device-Id": D2})
         e = ws.receive_json()
         assert e["type"] in ("clip", "create") and (e.get("text") in (None, "bob 的"))
+
+
+# ---------- v0.1.13：上传时选择过期时间 ----------
+@pytest.mark.parametrize("vis", ["public", "private"])
+@pytest.mark.parametrize("sec", [3600, 86400, 604800, 2592000])
+def test_expiry_param_on_text_and_file(c, vis, sec):
+    r = c.post("/content", json={"content": f"t{sec}{vis}", "visibility": vis, "expires_in": sec}).json()
+    assert r["visibility"] == vis and abs(r["expires_at"] - time.time() - sec) < 10
+    f = c.post("/upload_file", data={"visibility": vis, "expires_in": str(sec)}, files={"file": (f"f{sec}.txt", b"x")}).json()
+    assert f["visibility"] == vis and abs(f["expires_at"] - time.time() - sec) < 10
+
+
+def test_defaults_public_1day_private_never_and_explicit_never(c):
+    for raw in (None, "", -1):
+        pb = {"content": f"p{raw}", "visibility": "public"}
+        vb = {"content": f"v{raw}", "visibility": "private"}
+        if raw is not None:
+            pb["expires_in"] = vb["expires_in"] = raw
+        e = c.post("/content", json=pb).json()["expires_at"]
+        assert 86300 < e - time.time() <= 86400
+        assert c.post("/content", json=vb).json()["expires_at"] is None
+    e = c.post("/upload_file", data={"visibility": "public"}, files={"file": ("d.txt", b"x")}).json()["expires_at"]
+    assert 86300 < e - time.time() <= 86400
+    # 公共也可以明确选「永不过期」
+    assert c.post("/content", json={"content": "pn", "visibility": "public", "expires_in": 0}).json()["expires_at"] is None
+    assert c.post("/upload_file", data={"visibility": "public", "expires_in": "0"}, files={"file": ("n.txt", b"x")}).json()["expires_at"] is None
+
+
+def test_expiry_capped_and_config_presets(c):
+    r = c.post("/content", json={"content": "long", "visibility": "public", "expires_in": 10 ** 9}).json()
+    assert r["expires_at"] - time.time() <= 366 * 86400 + 5
+    cfg = c.get("/api/config").json()
+    assert cfg["expiry_default"] == {"public": 86400, "private": 0}
+    assert [p["sec"] for p in cfg["expiry_presets"]] == [3600, 86400, 604800, 2592000, 0]
+
+

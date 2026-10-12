@@ -4,6 +4,8 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'expiry_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/api.dart';
@@ -32,6 +34,7 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
   final List<PendingTransfer> _queue = [];
   bool _dragging = false;
   bool _sending = false;
+  int _exp = 0; // 快传是发给自己的私有内容：默认永不过期，可改
   String? _status;
   final _clip = ClipboardWatch();
 
@@ -108,13 +111,13 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
     try {
       for (final item in List<PendingTransfer>.from(_queue)) {
         if (item.isText && (item.textContent?.trim().isNotEmpty ?? false)) {
-          await widget.api.addText(item.textContent!, visibility: 'private', expiresIn: 0);
+          await widget.api.addText(item.textContent!, visibility: 'private', expiresIn: _exp);
         } else {
           await widget.api.uploadFile(
             bytes: item.bytes,
             filename: item.filename,
             visibility: 'private',
-            expiresIn: 0,
+            expiresIn: _exp,
             contentType: item.contentType,
           );
         }
@@ -203,6 +206,8 @@ class _QuickTransferPanelState extends State<QuickTransferPanel> {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          ExpiryPicker(value: _exp, onChanged: _sending ? (_) {} : (v) => setState(() => _exp = v)),
           if (_queue.isNotEmpty) ...[
             const SizedBox(height: 10),
             ..._queue.asMap().entries.map((e) {

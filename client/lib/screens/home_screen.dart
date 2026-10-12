@@ -13,6 +13,7 @@ import '../services/api.dart';
 import '../services/clipboard_watch.dart';
 import '../services/deep_link.dart';
 import '../services/clip_sync.dart';
+import '../widgets/expiry_picker.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
@@ -191,28 +192,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (e.isText) return '文本 ${(e.textContent?.length ?? 0)} 字';
       return e.filename;
     }).join('、');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('发送到我的设备？'),
-        content: Text('收到系统分享：\n$summary\n\n将上传到本账号「私有」区，其他已登录设备会实时同步。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('忽略')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('发送到我的设备')),
-        ],
-      ),
+    final exp = await confirmWithExpiry(
+      context,
+      title: '发送到我的设备？',
+      message: '收到系统分享：\n$summary\n\n将上传到本账号「私有」区，其他已登录设备会实时同步。',
+      okLabel: '发送到我的设备',
     );
-    if (ok != true || !mounted) return;
+    if (exp == null || !mounted) return;
     try {
       for (final item in items) {
         if (item.isText && (item.textContent?.trim().isNotEmpty ?? false)) {
-          await widget.api.addText(item.textContent!, visibility: 'private', expiresIn: 0);
+          await widget.api.addText(item.textContent!, visibility: 'private', expiresIn: exp);
         } else {
           await widget.api.uploadFile(
             bytes: item.bytes,
             filename: item.filename,
             visibility: 'private',
-            expiresIn: 0,
+            expiresIn: exp,
             contentType: item.contentType,
           );
         }
@@ -324,19 +320,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> _confirmClipboardText(String text) async {
     if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('检测到剪贴板文本'),
-        content: Text(text.length > 200 ? '${text.substring(0, 200)}…' : text),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('忽略')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('上传为私有')),
-        ],
-      ),
+    final exp = await confirmWithExpiry(
+      context,
+      title: '检测到剪贴板文本',
+      message: text.length > 200 ? '${text.substring(0, 200)}…' : text,
+      okLabel: '上传为私有',
     );
-    if (ok == true) {
-      await widget.api.addText(text, visibility: 'private', expiresIn: 0);
+    if (exp != null) {
+      await widget.api.addText(text, visibility: 'private', expiresIn: exp);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已上传到私有区')));
         _refresh();
@@ -346,19 +337,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> _confirmClipboardImage(Uint8List bytes, String name) async {
     if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('检测到剪贴板图片'),
-        content: Text('大小 ${(bytes.length / 1024).toStringAsFixed(1)} KB，上传为私有？'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('忽略')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('上传')),
-        ],
-      ),
+    final exp = await confirmWithExpiry(
+      context,
+      title: '检测到剪贴板图片',
+      message: '大小 ${(bytes.length / 1024).toStringAsFixed(1)} KB，上传为私有？',
     );
-    if (ok == true) {
-      await widget.api.uploadFile(bytes: bytes, filename: name, visibility: 'private', expiresIn: 0, contentType: 'image/png');
+    if (exp != null) {
+      await widget.api.uploadFile(bytes: bytes, filename: name, visibility: 'private', expiresIn: exp, contentType: 'image/png');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片已上传')));
         _refresh();
@@ -370,7 +355,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final textCtrl = TextEditingController();
     // 默认跟随当前标签：在「公共」里添加就默认公共（之前固定私有，导致公共区“传不上去”）
     var visibility = _scope;
-    var expiresIn = visibility == 'public' ? 86400 : 0;
+    var expiresIn = defaultExpiryFor(visibility);
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -393,25 +378,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   selected: {visibility},
                   onSelectionChanged: (s) => setS(() {
                     visibility = s.first;
-                    expiresIn = visibility == 'public' ? 86400 : 0;
+                    expiresIn = defaultExpiryFor(visibility);
                   }),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final e in [(0, '不过期'), (3600, '1 小时'), (86400, '24 小时'), (604800, '7 天')])
-                      ChoiceChip(
-                        label: Text(e.$2),
-                        selected: expiresIn == e.$1,
-                        onSelected: (_) => setS(() => expiresIn = e.$1),
-                      ),
-                  ],
-                ),
+                ExpiryPicker(value: expiresIn, onChanged: (v) => setS(() => expiresIn = v)),
                 if (visibility == 'public')
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Text('公共默认 24 小时后自动删除', style: Theme.of(ctx).textTheme.bodySmall),
+                    child: Text('公共默认 1 天后自动删除，可改选', style: Theme.of(ctx).textTheme.bodySmall),
                   ),
                 const SizedBox(height: 10),
                 TextField(
@@ -470,12 +445,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (r == null || r.files.isEmpty) return;
     final f = r.files.first;
     if (f.bytes == null) return;
-    final vis = _scope; // 上传到当前所在的区
+    final opt = await askUploadOptions(context, title: '上传 ${f.name}', initialVisibility: _scope);
+    if (opt == null || !mounted) return;
+    final vis = opt.visibility;
     await widget.api.uploadFile(
       bytes: f.bytes!,
       filename: f.name,
       visibility: vis,
-      expiresIn: vis == 'public' ? 86400 : 0,
+      expiresIn: opt.expiresIn,
     );
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已上传 ${f.name}（${vis == 'public' ? '公共' : '私有'}）')));
@@ -488,12 +465,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final x = await ImagePicker().pickImage(source: ImageSource.gallery);
     if (x == null) return;
     final bytes = await x.readAsBytes();
-    final vis = _scope;
+    if (!mounted) return;
+    final opt = await askUploadOptions(context, title: '上传图片', initialVisibility: _scope);
+    if (opt == null || !mounted) return;
+    final vis = opt.visibility;
     await widget.api.uploadFile(
       bytes: bytes,
       filename: x.name,
       visibility: vis,
-      expiresIn: vis == 'public' ? 86400 : 0,
+      expiresIn: opt.expiresIn,
       contentType: x.mimeType,
     );
     if (mounted) {

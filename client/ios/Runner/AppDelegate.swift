@@ -46,6 +46,18 @@ import UIKit
         } catch {
           result(FlutterError(code: "write_failed", message: error.localizedDescription, details: nil))
         }
+      case "setExpiry":
+        // 分享扩展上传时用的默认有效期（秒；0 = 永不过期），扩展 UI 里不另设选择器
+        guard let c = container else { result(["group": false]); return }
+        let args = call.arguments as? [String: Any] ?? [:]
+        let sec = (args["expires_in"] as? NSNumber)?.intValue ?? 0
+        do {
+          let data = try JSONSerialization.data(withJSONObject: ["expires_in": sec])
+          try data.write(to: c.appendingPathComponent("share_prefs.json"), options: .atomic)
+          result(["group": true, "written": true])
+        } catch {
+          result(FlutterError(code: "write_failed", message: error.localizedDescription, details: nil))
+        }
       case "readLog":
         guard let c = container else { result(""); return }
         result((try? String(contentsOf: c.appendingPathComponent("share_log.txt"), encoding: .utf8)) ?? "")
