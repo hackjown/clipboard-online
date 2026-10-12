@@ -189,3 +189,28 @@ def test_edit_text_via_ui(page, server):
     page.press(".edit-ta", "Control+Enter")
     page.wait_for_function("() => document.body.innerText.includes('新内容 v2')")
     assert "旧内容" not in page.inner_text(".card--text")
+
+
+def test_public_scope_add_and_upload_go_public(page, server):
+    """回归：在「公共」区打开添加面板，默认就是公共；上传的文件也进公共区（之前总默认私有并跳去私有区）。"""
+    page.evaluate("window.__clip.openAuth('register')")
+    page.wait_for_selector("#authUser")
+    page.fill("#authUser", "pubuser")
+    page.fill("#authPw", "demo1234")
+    page.click(".auth-form button[type=submit]")
+    page.wait_for_function("() => window.__clip.state.user && window.__clip.state.user.username === 'pubuser'")
+    page.evaluate("window.__clip.setScope('public', {force:true})")
+    page.evaluate("window.__clip.openAdd('text')")
+    page.wait_for_selector(".vistog-btn[data-vis=public][aria-checked=true]")
+    page.fill("textarea.ta", "公共区回归文本")
+    page.keyboard.press("Control+Enter")
+    page.wait_for_function("() => document.body.innerText.includes('公共区回归文本')")
+    assert page.evaluate("window.__clip.state.scope") == "public"
+    page.evaluate("window.__clip.openAdd('file')")
+    page.set_input_files("#fileInput", files=[{"name": "pub-reg.txt", "mimeType": "text/plain", "buffer": b"hi"}])
+    page.wait_for_timeout(300)
+    page.evaluate("() => { const b = [...document.querySelectorAll('.btn--block')].find((x) => !x.hidden && x.textContent.trim() === '上传'); if (b) b.click(); }")
+    page.wait_for_function("() => document.body.innerText.includes('pub-reg.txt')", timeout=10000)
+    items = api(server, "/api/items?scope=public")[0]["items"]
+    vis = {(i.get("content") or i.get("filename")): i["visibility"] for i in items}
+    assert vis.get("公共区回归文本") == "public" and vis.get("pub-reg.txt") == "public"

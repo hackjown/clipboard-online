@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/item.dart';
+import '../models/sync.dart';
 import '../models/user.dart';
 import 'auth_store.dart';
 import 'share_config.dart';
@@ -110,6 +111,42 @@ class ClipApi {
   Future<ArchiveListing> archiveListing(String uuid) async {
     final r = await http.get(_u('/api/items/$uuid/archive'), headers: _authHeaders);
     return ArchiveListing.fromJson(await _json(r));
+  }
+
+  // ---- 多设备剪贴板同步（设备列表 / 当前同步内容）----
+  Future<List<SyncDevice>> listDevices() async {
+    final r = await http.get(_u('/api/devices'), headers: _authHeaders);
+    final j = await _json(r);
+    return [for (final d in (j['devices'] as List? ?? const [])) SyncDevice.fromJson(Map<String, dynamic>.from(d as Map))];
+  }
+
+  Future<void> putDevice({required String name, required String platform, required String direction}) async {
+    if (deviceId.isEmpty) await _ensureDeviceId();
+    final r = await http.put(_u('/api/devices/${Uri.encodeComponent(deviceId)}'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({'name': name, 'platform': platform, 'direction': direction})));
+    await _json(r);
+  }
+
+  Future<void> deleteDevice(String id) async {
+    final r = await http.delete(_u('/api/devices/${Uri.encodeComponent(id)}'), headers: _authHeaders);
+    await _json(r);
+  }
+
+  Future<SyncClip?> getClip() async {
+    final r = await http.get(_u('/api/clipsync'), headers: _authHeaders);
+    final j = await _json(r);
+    final c = j['clip'];
+    return c is Map ? SyncClip.fromJson(Map<String, dynamic>.from(c)) : null;
+  }
+
+  /// 返回 true = 已广播；false = 与当前同步内容相同（去重，不再传播）
+  Future<bool> postClip(String text, {bool saveHistory = true}) async {
+    final r = await http.post(_u('/api/clipsync'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({'text': text, 'save_history': saveHistory})));
+    final j = await _json(r);
+    return j['duplicate'] != true;
   }
 
   // ---- Bark 推送设置 ----
@@ -354,8 +391,11 @@ class ClipApi {
   String wsUrl() {
     final b = base.replaceAll(RegExp(r'/+$'), '');
     final ws = b.startsWith('https') ? b.replaceFirst('https', 'wss') : b.replaceFirst('http', 'ws');
-    if (token != null) return '$ws/ws?token=${Uri.encodeQueryComponent(token!)}';
-    return '$ws/ws';
+    final q = <String>[
+      if (token != null) 'token=${Uri.encodeQueryComponent(token!)}',
+      if (deviceId.isNotEmpty) 'device=${Uri.encodeQueryComponent(deviceId)}', // 服务器据此显示「在线设备」
+    ];
+    return q.isEmpty ? '$ws/ws' : '$ws/ws?${q.join('&')}';
   }
 }
 

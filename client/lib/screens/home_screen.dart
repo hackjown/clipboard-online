@@ -12,6 +12,7 @@ import '../models/user.dart';
 import '../services/api.dart';
 import '../services/clipboard_watch.dart';
 import '../services/deep_link.dart';
+import '../services/clip_sync.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
@@ -61,6 +62,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<ClipItem> _items = [];
   Map<String, dynamic> _counts = {};
   String _q = '';
+  /// 类型筛选（与 Web 一致）：0 全部 · 1 文本 · 2 文件 · 3 收藏
+  int _filter = 0;
   bool _loading = true;
   String? _err;
   bool _watchOn = false;
@@ -114,6 +117,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _inbox.start();
     _refresh();
     DeepLinkBus.instance.pending.addListener(_onDeepLink);
+    ClipSync.instance.attach(widget.api); // 多设备剪贴板同步（按本机设置决定是否工作）
+    ClipSync.instance.lastApplied.addListener(_onClipApplied);
     WidgetsBinding.instance.addPostFrameCallback((_) => _onDeepLink()); // 冷启动：链接可能早于首页到达
   }
 
@@ -231,13 +236,30 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // 回到前台即视为已读
       Notifier.instance.clearUnread();
       _refresh(silent: true);
+      ClipSync.instance.onResume();
     }
   }
 
+  void _onClipApplied() {
+    final c = ClipSync.instance.lastApplied.value;
+    if (c == null || !mounted) return;
+    final preview = c.text.replaceAll('\n', ' ');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('已同步「${c.originName}」的剪贴板：${preview.length > 40 ? '${preview.substring(0, 40)}…' : preview}'),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
   void _onWsEvent(Map<String, dynamic> msg) {
+    if (msg['type'] == 'clip') {
+      ClipSync.instance.onRemote(msg);
+      return;
+    }
+    if (msg['type'] == 'devices') return;
     _refresh(silent: true);
     MenuBarController.instance.pulse.value++;
-    if (msg['type'] == 'create' && msg['visibility'] == 'private') {
+    // 剪贴板自动同步产生的历史不弹通知（每复制一次就响一次太吵）
+    if (msg['type'] == 'create' && msg['visibility'] == 'private' && msg['source'] != 'clipsync') {
       final uuid = msg['uuid'] as String?;
       if (uuid != null) _maybeNotify(uuid);
     }
@@ -272,6 +294,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _inbox.stop();
     if (MenuBarController.supported) MenuBarController.instance.onToggleWatch = null;
     DeepLinkBus.instance.pending.removeListener(_onDeepLink);
+    ClipSync.instance.lastApplied.removeListener(_onClipApplied);
+    ClipSync.instance.detach();
     _scroll.dispose();
     _tabs.dispose();
     super.dispose();
@@ -280,7 +304,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> _refresh({bool silent = false}) async {
     if (!silent) setState(() { _loading = true; _err = null; });
     try {
-      final r = await widget.api.items(scope: _scope, q: _q);
+      final r = await widget.api.items(
+        scope: _scope,
+        q: _q,
+        type: _filter == 1 ? 'text' : (_filter == 2 ? 'file' : 'all'),
+        starred: _filter == 3,
+      );
       if (!mounted) return;
       setState(() {
         _items = r.items;
@@ -339,8 +368,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> _showAdd() async {
     final textCtrl = TextEditingController();
-    var visibility = 'private';
-    var expiresIn = 0;
+    // 默认跟随当前标签：在「公共」里添加就默认公共（之前固定私有，导致公共区“传不上去”）
+    var visibility = _scope;
+    var expiresIn = visibility == 'public' ? 86400 : 0;
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -430,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     await widget.api.addText(content, visibility: vis, expiresIn: expiresIn);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已添加')));
-      if (vis == 'private') _tabs.index = 1;
+      _tabs.index = vis == 'public' ? 0 : 1;
       _refresh();
     }
   }
@@ -440,15 +470,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (r == null || r.files.isEmpty) return;
     final f = r.files.first;
     if (f.bytes == null) return;
+    final vis = _scope; // 上传到当前所在的区
     await widget.api.uploadFile(
       bytes: f.bytes!,
       filename: f.name,
-      visibility: 'private',
-      expiresIn: 0,
+      visibility: vis,
+      expiresIn: vis == 'public' ? 86400 : 0,
     );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已上传 ${f.name}')));
-      _tabs.index = 1;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已上传 ${f.name}（${vis == 'public' ? '公共' : '私有'}）')));
+      _tabs.index = vis == 'public' ? 0 : 1;
       _refresh();
     }
   }
@@ -457,16 +488,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final x = await ImagePicker().pickImage(source: ImageSource.gallery);
     if (x == null) return;
     final bytes = await x.readAsBytes();
+    final vis = _scope;
     await widget.api.uploadFile(
       bytes: bytes,
       filename: x.name,
-      visibility: 'private',
-      expiresIn: 0,
+      visibility: vis,
+      expiresIn: vis == 'public' ? 86400 : 0,
       contentType: x.mimeType,
     );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('图片已上传')));
-      _tabs.index = 1;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('图片已上传（${vis == 'public' ? '公共' : '私有'}）')));
+      _tabs.index = vis == 'public' ? 0 : 1;
       _refresh();
     }
   }
@@ -592,6 +624,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Text('图片 / 文件将上传到：${_scope == 'public' ? '公共区（24 小时后过期）' : '我的私有'}',
+                        style: Theme.of(ctx).textTheme.bodySmall),
+                  ),
                   ListTile(leading: const Icon(Icons.notes), title: const Text('添加文本'), onTap: () => Navigator.pop(ctx, 'text')),
                   ListTile(leading: const Icon(Icons.image), title: const Text('选图片'), onTap: () => Navigator.pop(ctx, 'image')),
                   ListTile(leading: const Icon(Icons.attach_file), title: const Text('选文件'), onTap: () => Navigator.pop(ctx, 'file')),
@@ -619,6 +656,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 _q = v.trim();
                 _refresh(silent: true);
               },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: InkSegment(
+                  key: const ValueKey('typeFilter'),
+                  labels: const ['全部', '文本', '文件', '收藏'],
+                  counts: [
+                    '${_counts['total'] ?? ''}',
+                    '${_counts['text'] ?? ''}',
+                    '${_counts['file'] ?? ''}',
+                    '${_counts['starred'] ?? ''}',
+                  ],
+                  index: _filter,
+                  onChanged: (i) {
+                    if (i == _filter) return;
+                    setState(() => _filter = i);
+                    _refresh(silent: true);
+                  },
+                ),
+              ),
             ),
           ),
           if (_err != null)

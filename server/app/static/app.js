@@ -695,8 +695,10 @@
     const b1 = h('button', { type: 'button', role: 'tab' }, icon('text'), '文本');
     const b2 = h('button', { type: 'button', role: 'tab' }, icon('upload'), '文件');
     const tabs = h('div', { class: 'tabs2', role: 'tablist' }, h('i', { class: 'thumb' }), b1, b2);
-    const vis = visToggle('private');
-    const exp = expiryPicker('private');
+    // 默认可见性跟随当前所在的区：在「公共」里打开就默认公共（之前总是默认私有，传完还被跳到私有区，看起来像「公共区上传失败」）
+    const defVis = scopeVis();
+    const vis = visToggle(defVis);
+    const exp = expiryPicker(defVis);
 
     const ta = h('textarea', { class: 'ta', placeholder: '输入或粘贴文本… 也可直接 Ctrl+V 粘贴截图', 'aria-label': '文本内容', rows: 6 });
     const hint = h('span', { class: 'hint', text: '0 字 · Ctrl/⌘ + Enter 添加' });
@@ -802,6 +804,9 @@
     const d = new Date();
     return `screenshot-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
   }
+  function scopeVis() { return state.scope === 'public' ? 'public' : 'private'; }
+  function curVis() { return (addView && addView.vis && addView.vis.dataset.vis) || scopeVis(); }
+  function curExp() { return (addView && addView.exp) ? addView.exp.getSec() : -1; }
   function enqueue(files, auto) {
     if (!state.user) { openAuth('login'); toast('请先登录后再上传', 'err'); return; }
     files = files.filter(Boolean); if (!files.length) return;
@@ -810,7 +815,7 @@
       if (f.type && f.type.startsWith('image/') && (!f.name || f.name === 'image.png' || f.name === 'blob')) {
         file = new File([f], screenshotName(f), { type: f.type });
       }
-      const u = { id: ++uid, file, pct: 0, status: 'pending' };
+      const u = { id: ++uid, file, pct: 0, status: 'pending', vis: curVis(), exp: curExp() };
       if (file.size > state.cfg.max_upload) { u.status = 'error'; u.error = `超过 ${fmtSize(state.cfg.max_upload)} 限制`; }
       uploads.push(u);
     });
@@ -818,7 +823,10 @@
     if (auto) { if (!addView) openAdd('file'); startUploads(); }
   }
   async function startUploads() {
-    if (running) return; running = true; refreshUploadUI();
+    if (running) return; running = true;
+    // 点「上传」那一刻的选择为准；之后关掉面板，队列里剩下的文件也不会掉回「私有」
+    if (addView && addView.vis) uploads.forEach((x) => { if (x.status === 'pending') { x.vis = curVis(); x.exp = curExp(); } });
+    refreshUploadUI();
     for (;;) {
       const u = uploads.find((x) => x.status === 'pending'); if (!u) break;
       await uploadOne(u);
@@ -830,8 +838,8 @@
       const xhr = new XMLHttpRequest(); u.xhr = xhr; u.status = 'uploading'; u.pct = 0; refreshUploadUI();
       const fd = new FormData();
       fd.append('file', u.file, u.file.name);
-      fd.append('visibility', (addView && addView.vis && addView.vis.dataset.vis) || 'private');
-      fd.append('expires_in', String((addView && addView.exp && addView.exp.getSec()) ?? -1));
+      fd.append('visibility', u.vis === 'public' ? 'public' : 'private');
+      fd.append('expires_in', String(u.exp ?? -1));
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) { u.pct = Math.min(99, Math.floor((e.loaded / e.total) * 100)); refreshUploadUI(); } };
       const fail = (m) => { u.status = 'error'; u.error = m; refreshUploadUI(); toast(m, 'err'); resolve(); };
       xhr.onload = () => {
@@ -991,6 +999,58 @@
         row('pk-all', 'trash', '清空我的全部', '私有 + 我的公共', 'all')),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
+  // ---- 多设备剪贴板同步（设计参考 lanecho，MIT；独立实现）----
+  const DIR_LABEL = { both: '双向', send: '只发送', recv: '只接收', off: '关闭' };
+  const PLAT_LABEL = { macos: 'Mac', ios: 'iPhone/iPad', android: 'Android', web: '网页', windows: 'Windows', linux: 'Linux' };
+  let clipView = null;
+  function openClipSync() {
+    const list = h('ul', { class: 'devlist' });
+    const latestBox = h('div', { class: 'preview mono', text: '加载中…' });
+    const latestMeta = h('p', { class: 'hint', text: '' });
+    let latestText = '';
+    const copyBtn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      if (!latestText) return;
+      try { await navigator.clipboard.writeText(latestText); toast('已复制到本机剪贴板'); } catch (_) { toast('浏览器不允许写剪贴板，请手动复制', 'err'); }
+    } }, icon('copy'), h('span', { text: '复制到本机' }));
+    const ta = h('textarea', { class: 'ta', rows: 3, placeholder: '输入文本，发送到我所有开启了同步的设备的剪贴板' });
+    const send = async (text) => {
+      if (!text || !text.trim()) { toast('内容为空', 'err'); return; }
+      try {
+        await api('/api/devices/' + encodeURIComponent(DEVICE_ID), { method: 'PUT', body: { name: '网页浏览器', platform: 'web', direction: 'send' } }).catch(() => {});
+        const r = await api('/api/clipsync', { method: 'POST', body: { text } });
+        toast(r.duplicate ? '内容与当前同步剪贴板相同' : '已同步到你的其他设备'); ta.value = ''; load();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const sendBtn = h('button', { type: 'button', class: 'btn btn--accent', onclick: () => send(ta.value) }, icon('upload'), h('span', { text: '发送到我的设备' }));
+    const readBtn = h('button', { type: 'button', class: 'btn', onclick: async () => {
+      try { send(await navigator.clipboard.readText()); } catch (_) { toast('浏览器不允许读取剪贴板，请粘贴到输入框', 'err'); }
+    } }, icon('copy'), h('span', { text: '读取本机剪贴板并发送' }));
+    async function load() {
+      try {
+        const [d, c] = await Promise.all([api('/api/devices'), api('/api/clipsync')]);
+        list.replaceChildren(...(d.devices.length ? d.devices.map((x) => h('li', { class: 'dev' },
+          h('span', { class: 'dot ' + (x.online ? 'on' : 'off'), title: x.online ? '在线' : '离线' }),
+          h('span', { class: 'dev-main' }, h('b', { text: x.name + (x.current ? '（本机）' : '') }),
+            h('small', { text: `${PLAT_LABEL[x.platform] || x.platform || '未知'} · ${DIR_LABEL[x.direction] || x.direction}${x.last_seen ? ' · ' + fmtTime(x.last_seen) : ''}` })),
+          h('button', { type: 'button', class: 'btn sm btn--ghost', onclick: async () => {
+            if (!confirm(`移除设备「${x.name}」？它下次开启同步时会重新出现。`)) return;
+            try { await api('/api/devices/' + encodeURIComponent(x.device_id), { method: 'DELETE' }); load(); } catch (e) { toast(e.message, 'err'); }
+          } }, '移除'))) : [h('li', { class: 'hint', text: '还没有设备开启同步。在 Mac / iPhone / Android 客户端的「设置 → 多设备剪贴板同步」里打开。' })]));
+        latestText = (c.clip && c.clip.text) || '';
+        latestBox.textContent = latestText ? latestText.slice(0, 400) + (latestText.length > 400 ? '…' : '') : '（还没有同步过内容）';
+        latestMeta.textContent = c.clip ? `来自「${c.clip.origin_name}」 · ${fmtTime(c.clip.ts)}` : '';
+        copyBtn.disabled = !latestText;
+      } catch (e) { latestBox.textContent = e.message; }
+    }
+    clipView = { load };
+    showSheet('clipsync', h('div', {}, h('h2', { id: 'sheetTitle', text: '多设备剪贴板同步' }),
+      h('p', { class: 'lead', text: '在一台设备上复制，其他设备的剪贴板自动更新（客户端里按设备开关、可选方向）。浏览器无法后台监听剪贴板，这里可以手动发送 / 复制。' }),
+      h('p', { class: 'hint', text: '当前同步剪贴板' }), latestBox, h('div', { class: 'row-between' }, latestMeta, copyBtn),
+      h('p', { class: 'hint', text: '我的设备' }), list,
+      h('p', { class: 'hint', text: '发送' }), ta, h('div', { class: 'btn-row' }, readBtn, sendBtn)));
+    load();
+  }
+
   function openBarkSettings() {
     const err = h('p', { class: 'err', hidden: true, role: 'alert' });
     const input = h('input', { type: 'url', id: 'barkUrl', placeholder: 'https://api.day.app/你的Key', autocomplete: 'off', spellcheck: 'false', maxlength: '512' });
@@ -1039,12 +1099,13 @@
       h('div', { class: 'pick' },
         h('button', { type: 'button', onclick: () => { closeSheet(); setScope('private'); } }, h('span', { class: 'pk-ico pk-text' }, icon('lock')), h('span', {}, h('b', { text: '我的私有' }), h('small', { text: `${state.counts.private} 条` }))),
         h('button', { type: 'button', onclick: () => { closeSheet(); setStarred(true); } }, h('span', { class: 'pk-ico pk-file' }, icon('star')), h('span', {}, h('b', { text: '我的收藏' }), h('small', { text: `${state.counts.starred || 0} 条` }))),
+        h('button', { type: 'button', onclick: () => openClipSync() }, h('span', { class: 'pk-ico pk-text' }, icon('copy')), h('span', {}, h('b', { text: '多设备剪贴板同步' }), h('small', { text: '设备列表 · 当前同步内容' }))),
         h('button', { type: 'button', onclick: () => openBarkSettings() }, h('span', { class: 'pk-ico pk-text' }, icon('check')), h('span', {}, h('b', { text: 'Bark 推送' }), h('small', { text: '新私有内容推送到 iPhone' }))),
         h('button', { type: 'button', onclick: () => openClearMenu() }, h('span', { class: 'pk-ico pk-file' }, icon('trash')), h('span', {}, h('b', { text: '清空内容' }), h('small', { text: '只清自己的' }))),
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.11` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.12` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 
@@ -1139,7 +1200,7 @@
     if (ws) try { ws.close(); } catch (_) {}
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     try {
-      ws = new WebSocket(proto + '//' + location.host + '/ws');
+      ws = new WebSocket(proto + '//' + location.host + '/ws' + (DEVICE_ID ? '?device=' + encodeURIComponent(DEVICE_ID) : ''));
     } catch (_) { state.ws = false; startPoll(); return; }
     ws.onopen = () => { state.ws = true; wsRetry = 0; setSync('ok', '实时'); stopPoll(); };
     ws.onmessage = (ev) => {
@@ -1147,6 +1208,8 @@
         const msg = JSON.parse(ev.data);
         if (msg.type === 'hello') return;
         if (['create', 'delete', 'update', 'clear'].includes(msg.type)) refreshScoped();
+        if ((msg.type === 'clip' || msg.type === 'devices') && sheetKind === 'clipsync' && clipView) clipView.load();
+        if (msg.type === 'clip' && msg.origin !== DEVICE_ID && sheetKind !== 'clipsync') toast(`「${msg.origin_name || '其他设备'}」复制了新内容`);
       } catch (_) {}
     };
     ws.onclose = () => { state.ws = false; startPoll(); const delay = Math.min(15000, 1000 * Math.pow(1.5, wsRetry++)); setTimeout(connectWS, delay); };

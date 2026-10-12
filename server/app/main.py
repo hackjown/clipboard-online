@@ -160,31 +160,46 @@ def guess_mime(filename: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
 class Hub:
     """WebSocket 广播：公共事件全员；私有事件仅所属用户。"""
     def __init__(self):
         self.lock = threading.Lock()
         self.clients: list[tuple[WebSocket, Optional[str]]] = []  # (ws, user_id|None)
+        self.devices: dict[int, str] = {}  # id(ws) -> 设备 ID（客户端在 /ws?device=… 上报，用于「在线设备」）
 
-    async def connect(self, ws: WebSocket, user_id: Optional[str]):
+    async def connect(self, ws: WebSocket, user_id: Optional[str], device_id: str = ""):
         await ws.accept()
         with self.lock:
             self.clients.append((ws, user_id))
+            if device_id:
+                self.devices[id(ws)] = device_id
 
     def disconnect(self, ws: WebSocket):
         with self.lock:
             self.clients = [(w, u) for w, u in self.clients if w is not ws]
+            self.devices.pop(id(ws), None)
+
+    def online_devices(self, user_id: str) -> set[str]:
+        with self.lock:
+            return {self.devices[id(w)] for w, u in self.clients if u == user_id and id(w) in self.devices}
 
     async def broadcast(self, event: dict, *, public: bool, owner_id: Optional[str] = None):
         dead = []
         with self.lock:
             targets = list(self.clients)
-        for ws, uid in targets:
-            if public or (owner_id and uid == owner_id):
-                try:
-                    await ws.send_json(event)
-                except Exception:
-                    dead.append(ws)
+        # 公共事件要发给所有连接（含访客、已睡眠手机的半开连接）：并发发送 + 每个 2 秒超时，
+        # 一个卡住的连接不能把上传请求本身拖住 / 拖失败。
+        async def one(ws):
+            try:
+                await asyncio.wait_for(ws.send_json(event), timeout=2.0)
+            except Exception:
+                dead.append(ws)
+        sel = [ws for ws, uid in targets if public or (owner_id and uid == owner_id)]
+        if sel:
+            await asyncio.gather(*(one(w) for w in sel), return_exceptions=True)
         for ws in dead:
             self.disconnect(ws)
 
@@ -198,6 +213,8 @@ class Store:
         self.meta_path = data_dir / "user_meta.json"
         self.og_path = data_dir / "og_cache.json"
         self.bark_path = data_dir / "bark.json"
+        self.devices_path = data_dir / "devices.json"
+        self.clipsync_path = data_dir / "clipsync.json"
         self.lock = threading.RLock()
         self.uploads.mkdir(parents=True, exist_ok=True)
         for p, default in ((self.items_path, []), (self.users_path, []), (self.meta_path, {}), (self.og_path, {}), (self.bark_path, {})):
@@ -303,6 +320,44 @@ class Store:
             self._write_json(self.meta_path, allm)
 
     # bark（每个用户一条；仅本人可读，绝不出现在 items / 其他用户数据里）
+    # ---- 多设备剪贴板同步（设计参考 lanecho，MIT；此处为独立重写）----
+    def get_devices(self, user_id: str) -> dict:
+        with self.lock:
+            d = self._read_json(self.devices_path)
+            u = d.get(user_id) if isinstance(d, dict) else None
+            return dict(u) if isinstance(u, dict) else {}
+
+    def put_device(self, user_id: str, device_id: str, info: Optional[dict]) -> None:
+        """info=None 表示删除。"""
+        with self.lock:
+            d = self._read_json(self.devices_path)
+            if not isinstance(d, dict):
+                d = {}
+            u = d.get(user_id) if isinstance(d.get(user_id), dict) else {}
+            if info is None:
+                u.pop(device_id, None)
+            else:
+                u[device_id] = info
+            if u:
+                d[user_id] = u
+            else:
+                d.pop(user_id, None)
+            self._write_json(self.devices_path, d)
+
+    def get_clip(self, user_id: str) -> Optional[dict]:
+        with self.lock:
+            d = self._read_json(self.clipsync_path)
+            c = d.get(user_id) if isinstance(d, dict) else None
+            return dict(c) if isinstance(c, dict) else None
+
+    def set_clip(self, user_id: str, clip: dict) -> None:
+        with self.lock:
+            d = self._read_json(self.clipsync_path)
+            if not isinstance(d, dict):
+                d = {}
+            d[user_id] = clip
+            self._write_json(self.clipsync_path, d)
+
     def get_bark(self, user_id: str) -> dict:
         with self.lock:
             allb = self._read_json(self.bark_path)
@@ -481,7 +536,7 @@ try:
 except OSError:  # pragma: no cover
     VERSION = "dev"
 # 功能清单：客户端据此判断服务器是否过旧（旧镜像没有这些路由时会返回裸的 404 Not Found）
-FEATURES = ["bark", "archive", "edit", "preview", "share", "ws", "tags", "version"]
+FEATURES = ["bark", "archive", "edit", "preview", "share", "ws", "tags", "version", "clipsync", "devices"]
 
 
 def _ip_blocked(ip: str) -> bool:
@@ -846,8 +901,14 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     async def emit(kind: str, item: Optional[dict] = None, owner_id: Optional[str] = None, visibility: Optional[str] = None):
         pub = (visibility or (item or {}).get("visibility")) == "public"
         oid = owner_id or (item or {}).get("owner_id")
-        await hub.broadcast({"type": kind, "uuid": (item or {}).get("uuid"), "visibility": visibility or (item or {}).get("visibility"),
-                             "owner_id": oid, "ts": time.time()}, public=pub, owner_id=oid)
+        ev = {"type": kind, "uuid": (item or {}).get("uuid"), "visibility": visibility or (item or {}).get("visibility"),
+              "owner_id": oid, "ts": time.time()}
+        if (item or {}).get("source"):
+            ev["source"] = item["source"]  # clipsync：客户端据此不弹「收到新内容」通知
+        try:  # 实时通知失败只记日志，绝不让写入请求失败（内容已经落库）
+            await hub.broadcast(ev, public=pub, owner_id=oid)
+        except Exception:  # noqa: BLE001
+            log.exception("ws broadcast failed")
 
     # ---- Bark ----
     bark_tasks: set = set()
@@ -905,8 +966,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
 
     def bark_schedule(me: dict, item: dict, request: Request) -> None:
         """私有条目创建后异步推送（失败只记日志）。"""
-        if item.get("visibility") != "private":
-            return
+        if item.get("visibility") != "private" or item.get("source") == "clipsync":
+            return  # 剪贴板自动同步产生的历史不推送（否则每复制一次就响一次）
         dev = (request.headers.get("x-device-id") or "").strip()[:64]
         base = str(request.base_url).rstrip("/") + "/"
         task = asyncio.get_running_loop().create_task(bark_notify_item(me["id"], item, dev, base))
@@ -1491,6 +1552,120 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return data
 
     # ---- websocket ----
+    # ================= 多设备剪贴板同步 =================
+    # 思路参考 lanecho（https://github.com/zlx2019/lanecho ，MIT）：一处复制、处处可粘贴；
+    # 每台设备可选同步方向（双向 / 只发送 / 只接收 / 关闭）；一次复制只传播一次（内容哈希去重 + 客户端回声抑制）；
+    # 冲突按「最后写入者胜」(LWW)。区别：lanecho 是局域网 P2P（mDNS + mTLS），这里经由本服务器 + WebSocket 中转，
+    # 因此跨网络也能用，传输安全依赖 HTTPS。
+    CLIP_MAX = 512 * 1024  # 与 lanecho 文本单条上限一致
+    DIRECTIONS = ("both", "send", "recv", "off")
+
+    def _dev_id(request: Request) -> str:
+        d = (request.headers.get("x-device-id") or "").strip()
+        return d if DEVICE_RE.match(d) else ""
+
+    def _dev_public(did: str, info: dict, online: set, current: str) -> dict:
+        return {"device_id": did, "name": info.get("name") or "未命名设备", "platform": info.get("platform") or "",
+                "direction": info.get("direction") or "both", "last_seen": info.get("last_seen"),
+                "created": info.get("created"), "online": did in online, "current": did == current}
+
+    @app.get("/api/devices")
+    def list_devices(request: Request):
+        me = require_user(request)
+        online = hub.online_devices(me["id"])
+        cur = _dev_id(request)
+        devs = [_dev_public(k, v, online, cur) for k, v in store.get_devices(me["id"]).items()]
+        devs.sort(key=lambda d: (not d["current"], not d["online"], -(d["last_seen"] or 0)))
+        return {"ok": True, "devices": devs}
+
+    @app.put("/api/devices/{device_id}")
+    async def put_device(device_id: str, request: Request):
+        me = require_user(request)
+        if not DEVICE_RE.match(device_id):
+            raise HTTPException(400, "设备 ID 无效")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求格式错误")
+        devs = store.get_devices(me["id"])
+        old = devs.get(device_id) or {}
+        if not old and len(devs) >= 50:
+            raise HTTPException(400, "设备数量已达上限（50），请先移除不用的设备")
+        direction = str(body.get("direction") or old.get("direction") or "both")
+        if direction not in DIRECTIONS:
+            raise HTTPException(400, "direction 须为 both / send / recv / off")
+        info = {"name": str(body.get("name") or old.get("name") or "未命名设备").strip()[:40] or "未命名设备",
+                "platform": str(body.get("platform") or old.get("platform") or "")[:20],
+                "direction": direction, "created": old.get("created") or time.time(), "last_seen": time.time()}
+        store.put_device(me["id"], device_id, info)
+        await hub.broadcast({"type": "devices", "ts": time.time()}, public=False, owner_id=me["id"])
+        return {"ok": True, "device": _dev_public(device_id, info, hub.online_devices(me["id"]), _dev_id(request))}
+
+    @app.delete("/api/devices/{device_id}")
+    async def delete_device(device_id: str, request: Request):
+        me = require_user(request)
+        if device_id not in store.get_devices(me["id"]):
+            raise HTTPException(404, "没有这个设备")
+        store.put_device(me["id"], device_id, None)
+        await hub.broadcast({"type": "devices", "ts": time.time()}, public=False, owner_id=me["id"])
+        return {"ok": True}
+
+    def _clip_public(c: Optional[dict]) -> dict:
+        if not c:
+            return {"ok": True, "clip": None}
+        return {"ok": True, "clip": {k: c.get(k) for k in ("text", "hash", "ts", "origin", "origin_name")}}
+
+    @app.get("/api/clipsync")
+    def get_clipsync(request: Request):
+        me = require_user(request)
+        return _clip_public(store.get_clip(me["id"]))
+
+    @app.post("/api/clipsync")
+    async def post_clipsync(request: Request):
+        """某台设备的本机复制。按方向放行 → 去重 → LWW 覆盖 → 只推给本人的其他设备（WebSocket type=clip）。"""
+        me = require_user(request)
+        dev = _dev_id(request)
+        if not dev:
+            raise HTTPException(400, "缺少 X-Device-Id")
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(400, "内容不能为空")
+        if len(text.encode("utf-8")) > CLIP_MAX:
+            raise HTTPException(413, "剪贴板文本超过 512 KB，未同步")
+        devs = store.get_devices(me["id"])
+        info = devs.get(dev)
+        if info and info.get("direction") in ("recv", "off"):
+            raise HTTPException(403, "此设备的同步方向不允许发送")
+        if info:  # 顺便刷新 last_seen
+            info = dict(info, last_seen=time.time())
+            store.put_device(me["id"], dev, info)
+        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        cur = store.get_clip(me["id"])
+        if cur and cur.get("hash") == h:
+            return {"ok": True, "duplicate": True, **_clip_public(cur)}  # 一次复制只传播一次
+        now = time.time()
+        # LWW：以服务器收到的时间为准（避免设备时钟不一致）；客户端可带 base_ts 表示「基于哪一版」，仅作诊断返回
+        clip = {"text": text, "hash": h, "ts": now, "origin": dev,
+                "origin_name": (info or {}).get("name") or "未命名设备"}
+        store.set_clip(me["id"], clip)
+        ev = {"type": "clip", **{k: clip[k] for k in ("text", "hash", "ts", "origin", "origin_name")}}
+        await hub.broadcast(ev, public=False, owner_id=me["id"])
+        uid = None
+        if not isinstance(body.get("save_history"), bool) or body.get("save_history"):
+            uid = uuidlib.uuid4().hex
+            item = {"uuid": uid, "type": "text", "content": text, "size": len(text.encode("utf-8")), "created": now,
+                    "owner_id": me["id"], "owner_username": me["username"], "visibility": "private",
+                    "expires_at": None, "share_token": None, "share_expires_at": None, "source": "clipsync"}
+            store.add_item(item)
+            await emit("create", item)
+        return {"ok": True, "duplicate": False, "uuid": uid, **_clip_public(clip)}
+
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         uid = None
@@ -1501,7 +1676,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             qtok = ws.query_params.get("token")
             if qtok:
                 uid = parse_token(qtok)
-        await hub.connect(ws, uid)
+        dev = (ws.query_params.get("device") or "").strip()
+        await hub.connect(ws, uid, dev if DEVICE_RE.match(dev) else "")
         try:
             await ws.send_json({"type": "hello", "user_id": uid})
             while True:

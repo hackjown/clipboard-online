@@ -27,24 +27,6 @@
 		<!-- 只保留 NSAllowsArbitraryLoads：iOS10+/macOS10.12+ 只要同时出现 ForMedia / InWebContent / LocalNetworking 任一键，系统就会忽略 NSAllowsArbitraryLoads（Apple 文档）-->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<!-- 附加：按域名的例外（与 NSAllowsArbitraryLoads 可并存；不要加 ForMedia/InWebContent/LocalNetworking）-->
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>3322.org</key>
-			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
-			<key>hackjown.3322.org</key>
-			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
-		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于把分享的内容发送到局域网内的剪贴板服务器。</string>

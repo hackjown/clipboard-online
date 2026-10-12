@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../app_info.dart';
 import '../services/api.dart';
+import '../widgets/clip_sync_section.dart';
 import '../services/auth_store.dart';
 import '../services/menubar.dart';
 import '../services/share_config.dart';
@@ -194,6 +195,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : 'Android：快传选文件；其它 App「分享到剪贴板」；条目「分享」可转出到微信等。',
             ),
           ),
+          const Divider(height: 32),
+          ClipSyncSection(api: widget.api),
           const Divider(height: 32),
           const Text('Bark 推送', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
           const SizedBox(height: 4),
