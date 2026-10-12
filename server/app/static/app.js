@@ -995,13 +995,14 @@
     const err = h('p', { class: 'err', hidden: true, role: 'alert' });
     const input = h('input', { type: 'url', id: 'barkUrl', placeholder: 'https://api.day.app/你的Key', autocomplete: 'off', spellcheck: 'false', maxlength: '512' });
     const skip = h('input', { type: 'checkbox', id: 'barkSkip' });
+    const inapp = h('input', { type: 'checkbox', id: 'barkInApp', checked: true });
     const test = h('button', { type: 'button', class: 'btn' }, '测试');
     const save = h('button', { type: 'submit', class: 'btn btn--accent' }, '保存');
     const show = (m) => { err.textContent = m; err.hidden = !m; };
-    const body = () => ({ bark_url: input.value.trim(), bark_exclude_device: skip.checked ? DEVICE_ID : '' });
+    const body = () => ({ bark_url: input.value.trim(), bark_exclude_device: skip.checked ? DEVICE_ID : '', open_in_app: inapp.checked });
     test.addEventListener('click', () => {
       show(''); test.disabled = true;
-      api('/api/settings/bark/test', { method: 'POST', body: { bark_url: input.value.trim() } })
+      api('/api/settings/bark/test', { method: 'POST', body: { bark_url: input.value.trim(), open_in_app: inapp.checked } })
         .then(() => toast('测试推送已发送，请查看手机')).catch((e) => show(e.message)).finally(() => { test.disabled = false; });
     });
     const form = h('form', { class: 'auth-form', onsubmit: (e) => {
@@ -1012,10 +1013,11 @@
     } },
       h('label', { class: 'field' }, h('span', { text: 'Bark 推送地址' }), input),
       h('label', { class: 'field', style: 'display:flex;gap:8px;align-items:center' }, skip, h('span', { text: '不推送本设备发出的内容' })),
+      h('label', { class: 'field', style: 'display:flex;gap:8px;align-items:center' }, inapp, h('span', { text: '点击推送打开 App（clipboard:// 深链；关闭则打开网站链接）' })),
       err, h('div', { class: 'btn-row' }, test, save));
     showSheet('bark', h('div', {}, h('h2', { id: 'sheetTitle', text: 'Bark 推送' }),
       h('p', { class: 'lead', text: '在 iPhone 安装 Bark，复制其中的设备地址粘贴到这里。你的私有区有新内容时会推送（留空并保存即关闭）。' }), form));
-    api('/api/settings/bark').then((d) => { input.value = d.bark_url || ''; skip.checked = !!d.bark_exclude_device && d.bark_exclude_device === DEVICE_ID; }).catch(() => {});
+    api('/api/settings/bark').then((d) => { input.value = d.bark_url || ''; skip.checked = !!d.bark_exclude_device && d.bark_exclude_device === DEVICE_ID; inapp.checked = d.open_in_app !== false; }).catch(() => {});
   }
 
   // 主题：跟随系统 / 浅色 / 深色（直接选择，不只是循环切换）
@@ -1042,7 +1044,7 @@
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.9` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.10` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 

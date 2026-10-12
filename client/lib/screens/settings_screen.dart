@@ -25,6 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _base = TextEditingController();
   final _bark = TextEditingController();
   bool _barkSkip = true;
+  bool _barkOpenInApp = true;
   bool _barkBusy = false;
   bool? _group;
   String _shareLog = '';
@@ -35,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) setState(() {
         _bark.text = b.url;
         _barkSkip = b.url.isEmpty ? true : b.skipThisDevice;
+        _barkOpenInApp = b.openInApp;
       });
     } catch (_) {}
   }
@@ -212,12 +214,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _barkSkip,
             onChanged: (v) => setState(() => _barkSkip = v),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('点击推送打开 App'),
+            subtitle: const Text('推送链接用 clipboard://item/…（直达该条内容）；关闭则打开网站链接'),
+            value: _barkOpenInApp,
+            onChanged: (v) => setState(() => _barkOpenInApp = v),
+          ),
           Row(children: [
             Expanded(
               child: OutlinedButton(
                 onPressed: _barkBusy || _bark.text.trim().isEmpty
                     ? null
-                    : () => _barkAction(() => widget.api.testBark(_bark.text), '测试推送已发送，请查看手机'),
+                    : () => _barkAction(() => widget.api.testBark(_bark.text, openInApp: _barkOpenInApp), '测试推送已发送，请查看手机'),
                 child: const Text('测试'),
               ),
             ),
@@ -226,7 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: FilledButton(
                 onPressed: _barkBusy
                     ? null
-                    : () => _barkAction(() => widget.api.putBark(_bark.text, skipThisDevice: _barkSkip),
+                    : () => _barkAction(() => widget.api.putBark(_bark.text, skipThisDevice: _barkSkip, openInApp: _barkOpenInApp),
                         _bark.text.trim().isEmpty ? 'Bark 已关闭' : 'Bark 已保存'),
                 child: const Text('保存'),
               ),

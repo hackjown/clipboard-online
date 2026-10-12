@@ -167,3 +167,9 @@ macOS 版是「菜单栏应用」（`tray_manager` + `window_manager`）：
 
 - PDF 预览：`pdfx`（iOS / Android / macOS 原生渲染）。PDF 先用带认证的客户端下载到缓存，再本地渲染；失败时仍可用「分享 / 保存」。
 - 设置页：服务器版本低于 App 时显示红色横幅 + 可复制的更新命令，并显示当前使用的服务器地址。
+
+
+## v0.1.10 说明
+
+- 深链：`clipboard://item/<uuid>`（定位 / 高亮条目，媒体类自动预览）、`clipboard://home/private|public`、`clipboard://s/<token>`（分享页）。实现见 `lib/services/deep_link.dart`（解析 + 待处理队列）与 `HomeScreen._onDeepLink`。
+- 设置 → 「点击推送打开 App」开关（对应服务器 Bark 设置 `open_in_app`）。

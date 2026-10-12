@@ -11,6 +11,7 @@ import '../models/item.dart';
 import '../models/user.dart';
 import '../services/api.dart';
 import '../services/clipboard_watch.dart';
+import '../services/deep_link.dart';
 import '../services/ws_sync.dart';
 import '../utils/sensitive.dart';
 import '../services/file_transfer.dart';
@@ -52,6 +53,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late final FileTransferService _xfer;
   late final ShareInbox _inbox;
   Timer? _poll;
+  final ScrollController _scroll = ScrollController();
+  final Map<String, GlobalKey> _itemKeys = {};
+  String? _highlight;
+  Future<void>? _restored;
 
   List<ClipItem> _items = [];
   Map<String, dynamic> _counts = {};
@@ -84,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.initState();
     // 登录后默认进「我的私有」，并记住上次选择
     _tabs = TabController(length: 2, vsync: this, initialIndex: 1);
-    _restoreTab();
+    _restored = _restoreTab();
     _tabs.addListener(() {
       if (!_tabs.indexIsChanging) {
         _saveTab();
@@ -108,6 +113,71 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _inbox.onShared = (items) => _offerQuickSend(items);
     _inbox.start();
     _refresh();
+    DeepLinkBus.instance.pending.addListener(_onDeepLink);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onDeepLink()); // 冷启动：链接可能早于首页到达
+  }
+
+  // ---- 深链：clipboard://item/<uuid> · clipboard://home/private ----
+  Future<void> _onDeepLink() async {
+    if (DeepLinkBus.instance.pending.value == null) return;
+    final link = DeepLinkBus.instance.take();
+    if (link == null) return;
+    await _restored; // 先等「记住上次标签」恢复完，避免它把标签又改回去
+    if (!mounted) return;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    final wantIndex = (link is HomeLink && link.scope == 'public') ? 0 : 1;
+    if (_tabs.index != wantIndex) _tabs.index = wantIndex;
+    Notifier.instance.clearUnread();
+    if (link is ItemLink) {
+      await _locateItem(link.uuid);
+    } else {
+      await _refresh(silent: true);
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+    }
+  }
+
+  GlobalKey _keyFor(String uuid) => _itemKeys.putIfAbsent(uuid, () => GlobalKey());
+
+  Future<void> _locateItem(String uuid) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await _refresh(silent: true);
+      if (!mounted) return;
+      final i = _items.indexWhere((e) => e.uuid == uuid);
+      if (i >= 0) {
+        await _revealItem(i);
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 800)); // 新内容可能还在落库
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有找到这条内容（可能已删除或已过期）')));
+    }
+  }
+
+  Future<void> _revealItem(int i) async {
+    final it = _items[i];
+    setState(() => _highlight = it.uuid);
+    await WidgetsBinding.instance.endOfFrame;
+    var ctx = _keyFor(it.uuid).currentContext;
+    if (ctx == null && _scroll.hasClients) {
+      // 列表是懒加载的：先按估算高度跳到附近，再精确定位
+      _scroll.jumpTo((i * 240.0).clamp(0.0, _scroll.position.maxScrollExtent));
+      await WidgetsBinding.instance.endOfFrame;
+      ctx = _keyFor(it.uuid).currentContext;
+    }
+    if (ctx != null && ctx.mounted) {
+      await Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 350), alignment: 0.1);
+    }
+    Timer(const Duration(milliseconds: 3000), () {
+      if (mounted && _highlight == it.uuid) setState(() => _highlight = null);
+    });
+    // 图片 / 视频 / PDF / 压缩包：直接打开预览
+    const auto = {MediaKind.image, MediaKind.video, MediaKind.pdf, MediaKind.archive};
+    if (it.isFile && auto.contains(it.mediaKind) && mounted) {
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => MediaPreviewScreen(api: widget.api, item: it)));
+    }
   }
 
   Future<void> _offerQuickSend(List<PendingTransfer> items) async {
@@ -201,6 +271,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _clip.stopWatch();
     _inbox.stop();
     if (MenuBarController.supported) MenuBarController.instance.onToggleWatch = null;
+    DeepLinkBus.instance.pending.removeListener(_onDeepLink);
+    _scroll.dispose();
     _tabs.dispose();
     super.dispose();
   }
@@ -560,6 +632,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: _loading && _items.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView.builder(
+                      controller: _scroll,
                       physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: _items.isEmpty ? 1 : _items.length,
                       itemBuilder: (ctx, i) {
@@ -570,7 +643,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           );
                         }
                         final it = _items[i];
-                        return ItemCard(
+                        final card = ItemCard(
                           item: it,
                           imageUrl: it.mediaKind == MediaKind.image && it.filename != null
                               ? widget.api.downloadUrl(it.filename!)
@@ -634,6 +707,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   _refresh(silent: true);
                                 }
                               : null,
+                        );
+                        final hl = _highlight == it.uuid;
+                        return KeyedSubtree(
+                          key: _keyFor(it.uuid),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: hl ? context.ink.accent : Colors.transparent, width: 3),
+                            ),
+                            child: card,
+                          ),
                         );
                       },
                     ),

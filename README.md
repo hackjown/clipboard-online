@@ -85,7 +85,13 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.9）
+## 本版新增（v0.1.10）
+
+- **点 Bark 推送直接打开 App**：推送的 `url` 参数现在是深链 `clipboard://item/<uuid>`（测试推送 / 无条目时是 `clipboard://home/private`），Bark 支持自定义 URL scheme，所以点推送会进「剪贴板」App 而不是浏览器。App 收到后：切到「我的私有」→ 刷新 → 滚动到并高亮该条；图片 / 视频 / PDF / 压缩包会自动打开预览。冷启动（App 没在运行）和已在运行都支持（冷启动时链接先挂起，首页出现后处理；还没登录则登录后处理；macOS 会把窗口带到前台；已打开的子页面会先返回首页）。
+- **可开关**：Bark 设置新增 `open_in_app`（默认开）。Web「账号菜单 → Bark 推送」和客户端「设置 → 点击推送打开 App」都能关；关闭后保持旧行为——推送里是网站的 https 链接。`GET/PUT /api/settings/bark` 返回 / 接收 `open_in_app`（PUT 不带该字段则保持原值）。
+- **自定义 scheme 不需要付费开发者账号**：`clipboard://` 是 `CFBundleURLTypes` 里的普通 URL scheme，侧载 / TrollStore 同样可用。已注册：iOS（`CFBundleURLSchemes` = `clipboard`，原有）、macOS（本版新增）、Android（`intent-filter` scheme=`clipboard`，原有）。CI 会解包最终的 unsigned / TrollStore IPA 与 macOS app，校验 Info.plist 里仍有 `clipboard` scheme（`client/tool/verify_scheme.sh`），ldid 签名不会改动它。
+
+## 更早的版本（v0.1.9）
 
 - **App 内 PDF 预览**（iOS / Android / macOS）：带认证下载到本机缓存（进度 / 复用 / 可取消，与视频同一套），用 [`pdfx`](https://pub.dev/packages/pdfx) 渲染（系统原生渲染，无需额外原生配置），支持滚动 / 双指缩放 / 页码，底部仍有分享 / 保存。Web 的 iframe 预览不变。
 - **Bark 被 SSRF 检查误拦**：服务器若处于 OpenClash / fake-IP 之类的代理环境，`api.day.app` 会被解析成内网地址（如 `198.18.x.x`、`192.168.x.x`）。现在：**官方域名 `api.day.app` 及其子域名**无论 DNS 解析到什么都放行（含 `198.18.0.0/15`），其它域名仍按 SSRF 规则拦截；IP 字面量（如 `https://198.18.0.1/KEY`）仍会被拦。拦截时的提示会写明「哪个域名解析到了哪个 IP」，并给出可复制的示例。自建在内网的 Bark / 想放行所有内网地址时，给服务器设置环境变量 `CLIP_BARK_ALLOW_PRIVATE=1`：

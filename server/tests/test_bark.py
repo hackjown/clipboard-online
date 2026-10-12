@@ -114,7 +114,7 @@ def test_private_text_triggers_push(env):
     assert url == BARK
     assert body["title"] == "剪贴板：收到新内容" and body["group"] == "clipboard"
     assert body["body"].startswith("这是一条很长的文本") and len(body["body"]) <= 61 and body["body"].endswith("…")
-    assert body["url"].startswith("http")
+    assert body["url"].startswith("clipboard://item/")
 
 
 def test_private_file_triggers_push_with_filename(env):
@@ -227,3 +227,50 @@ def test_test_endpoint_works_for_official_host_behind_fake_ip(tmp_path, monkeypa
         assert c.put("/api/settings/bark", json={"bark_url": "https://api.day.app/KEY9"}).status_code == 200
         assert c.post("/api/settings/bark/test", json={}).status_code == 200
         assert fake.calls[0][0] == "https://api.day.app/KEY9"
+
+
+# ---- 点击推送打开 App（深链） ----
+def test_open_in_app_default_true_and_deeplink_uses_uuid(env):
+    c, fake, _ = env
+    assert c.get("/api/settings/bark").json()["open_in_app"] is True       # 未配置时默认 true
+    assert put(c).status_code == 200
+    assert c.get("/api/settings/bark").json()["open_in_app"] is True
+    uid = c.post("/content", json={"content": "hi", "visibility": "private"}).json()["uuid"]
+    _, body = fake.wait(1)[0]
+    assert body["url"] == f"clipboard://item/{uid}"
+    fid = c.post("/upload_file", data={"visibility": "private"}, files={"file": ("a.pdf", b"%PDF-1")}).json()["uuid"]
+    _, body2 = fake.wait(2)[1]
+    assert body2["url"] == f"clipboard://item/{fid}"
+
+
+def test_open_in_app_off_keeps_site_link_and_persists(env):
+    c, fake, _ = env
+    r = c.put("/api/settings/bark", json={"bark_url": BARK, "open_in_app": False})
+    assert r.status_code == 200 and r.json()["open_in_app"] is False
+    assert c.get("/api/settings/bark").json()["open_in_app"] is False
+    # 只改地址不带 open_in_app：保持原值
+    c.put("/api/settings/bark", json={"bark_url": BARK + "2"})
+    assert c.get("/api/settings/bark").json()["open_in_app"] is False
+    c.post("/content", json={"content": "hi", "visibility": "private"})
+    _, body = fake.wait(1)[0]
+    assert body["url"].startswith("http") and "clipboard://" not in body["url"]
+    # 重新打开
+    c.put("/api/settings/bark", json={"bark_url": BARK, "open_in_app": True})
+    assert c.get("/api/settings/bark").json()["open_in_app"] is True
+
+
+def test_open_in_app_validation_and_test_endpoint_fallback_link(env):
+    c, fake, _ = env
+    assert c.put("/api/settings/bark", json={"bark_url": BARK, "open_in_app": "yes"}).status_code == 400
+    assert c.post("/api/settings/bark/test", json={"bark_url": BARK}).status_code == 200
+    assert fake.calls[-1][1]["url"] == "clipboard://home/private"           # 测试推送：没有条目 → 回落到首页
+    assert c.post("/api/settings/bark/test", json={"bark_url": BARK, "open_in_app": False}).status_code == 200
+    assert fake.calls[-1][1]["url"].startswith("http")
+
+
+def test_open_in_app_not_leaked_to_other_users(env):
+    c, fake, _ = env
+    c.put("/api/settings/bark", json={"bark_url": BARK, "open_in_app": False})
+    c.post("/api/logout")
+    c.post("/api/register", json={"username": "bobby", "password": "demo123"})
+    assert c.get("/api/settings/bark").json()["open_in_app"] is True        # 别人的设置不影响我

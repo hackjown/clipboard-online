@@ -307,15 +307,18 @@ class Store:
         with self.lock:
             allb = self._read_json(self.bark_path)
             b = (allb.get(user_id) if isinstance(allb, dict) else None) or {}
-            return {"url": str(b.get("url") or ""), "exclude_device": str(b.get("exclude_device") or "")}
+            return {"url": str(b.get("url") or ""), "exclude_device": str(b.get("exclude_device") or ""),
+                    "open_in_app": bool(b.get("open_in_app", True))}  # 默认：点击推送打开 App（深链）
 
-    def set_bark(self, user_id: str, url: str, exclude_device: str) -> None:
+    def set_bark(self, user_id: str, url: str, exclude_device: str, open_in_app: Optional[bool] = None) -> None:
         with self.lock:
             allb = self._read_json(self.bark_path)
             if not isinstance(allb, dict):
                 allb = {}
             if url:
-                allb[user_id] = {"url": url, "exclude_device": exclude_device}
+                old = allb.get(user_id) or {}
+                oia = open_in_app if open_in_app is not None else bool(old.get("open_in_app", True))
+                allb[user_id] = {"url": url, "exclude_device": exclude_device, "open_in_app": oia}
             else:
                 allb.pop(user_id, None)
             self._write_json(self.bark_path, allb)
@@ -875,6 +878,13 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         except Exception as e:  # noqa: BLE001
             return False, f"请求 Bark 失败：{type(e).__name__}: {e}"[:200]
 
+    def bark_open_url(cfg: dict, uuid: Optional[str], site: str) -> Optional[str]:
+        """点击推送后打开什么：open_in_app（默认）→ App 深链 clipboard://item/<uuid>（无 uuid 时 clipboard://home/private）；
+        关闭时保持旧行为：站点 https 链接。"""
+        if cfg.get("open_in_app", True):
+            return f"clipboard://item/{uuid}" if uuid else "clipboard://home/private"
+        return site or None
+
     async def bark_notify_item(user_id: str, item: dict, device_id: str, base_url: str) -> None:
         try:
             cfg = store.get_bark(user_id)
@@ -887,7 +897,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
                 body = txt[:60] + ("…" if len(txt) > 60 else "")
             else:
                 body = item.get("filename") or "文件"
-            ok, msg = await bark_send(cfg["url"], "剪贴板：收到新内容", body, base_url or None)
+            ok, msg = await bark_send(cfg["url"], "剪贴板：收到新内容", body, bark_open_url(cfg, item.get("uuid"), base_url))
             if not ok:
                 log.warning("bark push failed for user %s: %s", user_id, msg)
         except Exception:  # noqa: BLE001
@@ -907,7 +917,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     def get_bark_settings(request: Request):
         me = require_user(request)
         b = store.get_bark(me["id"])
-        return {"ok": True, "bark_url": b["url"], "bark_exclude_device": b["exclude_device"], "configured": bool(b["url"])}
+        return {"ok": True, "bark_url": b["url"], "bark_exclude_device": b["exclude_device"], "configured": bool(b["url"]),
+                "open_in_app": b["open_in_app"]}
 
     @app.put("/api/settings/bark")
     async def put_bark_settings(request: Request):
@@ -926,8 +937,13 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             except ValueError as e:
                 raise HTTPException(400, str(e))
         exclude = str(body.get("bark_exclude_device") or body.get("exclude_device") or "").strip()[:64]
-        store.set_bark(me["id"], url, exclude)
-        return {"ok": True, "bark_url": url, "bark_exclude_device": exclude, "configured": bool(url)}
+        oia = body.get("open_in_app")
+        if oia is not None and not isinstance(oia, bool):
+            raise HTTPException(400, "open_in_app 须为布尔值")
+        store.set_bark(me["id"], url, exclude, oia)
+        cur = store.get_bark(me["id"])
+        return {"ok": True, "bark_url": url, "bark_exclude_device": exclude, "configured": bool(url),
+                "open_in_app": cur["open_in_app"] if url else True}
 
     @app.post("/api/settings/bark/test")
     async def test_bark(request: Request):
@@ -937,10 +953,14 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         except Exception:
             body = {}
         raw = str((body or {}).get("bark_url") or "").strip() if isinstance(body, dict) else ""
-        url = raw or store.get_bark(me["id"])["url"]
+        cur = store.get_bark(me["id"])
+        url = raw or cur["url"]
         if not url:
             raise HTTPException(400, "还没有设置 Bark 地址")
-        ok, msg = await bark_send(url, "剪贴板：测试推送", f"@{me['username']} 的 Bark 推送已连通", str(request.base_url).rstrip("/") + "/")
+        oia = body.get("open_in_app") if isinstance(body, dict) else None
+        cfg = {"open_in_app": oia if isinstance(oia, bool) else cur["open_in_app"]}
+        ok, msg = await bark_send(url, "剪贴板：测试推送", f"@{me['username']} 的 Bark 推送已连通",
+                                  bark_open_url(cfg, None, str(request.base_url).rstrip("/") + "/"))
         if not ok:
             raise HTTPException(502, msg)
         return {"ok": True}

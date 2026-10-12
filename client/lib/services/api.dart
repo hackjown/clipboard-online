@@ -113,29 +113,31 @@ class ClipApi {
   }
 
   // ---- Bark 推送设置 ----
-  Future<({String url, bool skipThisDevice})> getBark() async {
+  Future<({String url, bool skipThisDevice, bool openInApp})> getBark() async {
     final r = await http.get(_u('/api/settings/bark'), headers: _authHeaders);
     final j = await _json(r);
     return (
       url: (j['bark_url'] ?? '').toString(),
       skipThisDevice: deviceId.isNotEmpty && j['bark_exclude_device'] == deviceId,
+      openInApp: j['open_in_app'] != false,
     );
   }
 
-  Future<void> putBark(String url, {required bool skipThisDevice}) async {
+  Future<void> putBark(String url, {required bool skipThisDevice, bool openInApp = true}) async {
     final r = await http.put(_u('/api/settings/bark'),
         headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
         body: utf8.encode(jsonEncode({
           'bark_url': url.trim(),
           'bark_exclude_device': skipThisDevice ? deviceId : '',
+          'open_in_app': openInApp,
         })));
     await _json(r);
   }
 
-  Future<void> testBark(String url) async {
+  Future<void> testBark(String url, {bool openInApp = true}) async {
     final r = await http.post(_u('/api/settings/bark/test'),
         headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
-        body: utf8.encode(jsonEncode({'bark_url': url.trim()})));
+        body: utf8.encode(jsonEncode({'bark_url': url.trim(), 'open_in_app': openInApp})));
     await _json(r);
   }
 

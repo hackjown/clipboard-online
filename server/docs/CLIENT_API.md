@@ -303,3 +303,8 @@ class ClipApi {
 ### 编辑文本（v0.1.8）
 
 `PATCH /api/items/{uuid}`，JSON：`content`（非空，≤ 文本上限）、可选 `visibility`、`expires_in`（秒，0 不过期）、`tags`（数组）。仅所有者：未登录 401，非所有者 403，不存在/已过期 404，非文本 400，超限 413。成功返回 `{ok:true,item:{...}}`，条目 `updated` 为更新时间，`share_token` 不变，并广播 WebSocket `update`。
+
+
+### Bark：点击推送打开 App（v0.1.10）
+
+`GET/PUT /api/settings/bark` 增加布尔字段 `open_in_app`（默认 `true`；PUT 不带则保持原值，非布尔 400）。`POST /api/settings/bark/test` 也可带 `open_in_app` 临时覆盖。为 `true` 时推送的 `url` 为 `clipboard://item/<uuid>`（测试推送 `clipboard://home/private`），为 `false` 时为站点 https 链接。

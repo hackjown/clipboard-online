@@ -10,6 +10,7 @@ import 'screens/settings_screen.dart';
 import 'screens/share_view_screen.dart';
 import 'services/api.dart';
 import 'services/auth_store.dart';
+import 'services/deep_link.dart';
 import 'services/theme_controller.dart';
 import 'theme/ink_theme.dart';
 
@@ -54,30 +55,31 @@ class _ClipboardAppState extends State<ClipboardApp> {
   void _listenLinks() {
     try {
       final links = AppLinks();
-      links.uriLinkStream.listen((uri) {
-        final token = _tokenFromUri(uri);
-        if (token != null) {
-          if (_ready) {
-            _openShare(token);
-          } else {
-            _pendingShareToken = token;
-          }
-        }
-      });
+      links.uriLinkStream.listen(_onUri);
       links.getInitialLink().then((uri) {
-        if (uri == null) return;
-        final token = _tokenFromUri(uri);
-        if (token != null) _pendingShareToken = token;
+        if (uri != null) _onUri(uri, cold: true);
       });
     } catch (_) {}
   }
 
-  String? _tokenFromUri(Uri uri) {
-    final parts = uri.pathSegments;
-    final i = parts.indexOf('s');
-    if (i >= 0 && i + 1 < parts.length) return parts[i + 1];
-    if (uri.host == 's' && parts.isNotEmpty) return parts.first;
-    return null;
+  void _onUri(Uri uri, {bool cold = false}) {
+    final dl = parseDeepLink(uri);
+    if (dl == null) return;
+    if (dl is ShareLink) {
+      if (_ready && !cold) {
+        _openShare(dl.token);
+      } else {
+        _pendingShareToken = dl.token;
+        if (_ready) {
+          _openShare(dl.token);
+          _pendingShareToken = null;
+        }
+      }
+      return;
+    }
+    // item / home：交给 HomeScreen（冷启动或未登录时先挂起，进入首页后处理）
+    DeepLinkBus.instance.post(dl);
+    if (MenuBarController.supported) MenuBarController.instance.openMain();
   }
 
   void _openShare(String token) {
