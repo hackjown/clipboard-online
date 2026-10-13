@@ -145,12 +145,26 @@ class ClipApi {
   }
 
   /// 返回 true = 已广播；false = 与当前同步内容相同（去重，不再传播）
-  Future<bool> postClip(String text, {bool saveHistory = true}) async {
+  Future<bool> postClip(String text, {bool saveHistory = false}) async {
     final r = await http.post(_u('/api/clipsync'),
         headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
         body: utf8.encode(jsonEncode({'text': text, 'save_history': saveHistory})));
     final j = await _json(r);
     return j['duplicate'] != true;
+  }
+
+  /// 把「其他设备同步过来」的文本记入我的私有（source=clipsync，服务器按内容去重、不发 Bark）
+  Future<String> archiveClipSync(String content) async {
+    final r = await http.post(_u('/content'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({
+          'content': content,
+          'visibility': 'private',
+          'expires_in': 0,
+          'source': 'clipsync',
+        })));
+    final j = await _json(r);
+    return (j['uuid'] ?? '').toString();
   }
 
   // ---- Bark 推送设置 ----

@@ -24,7 +24,7 @@ def mk(c, content="hello", vis="private", **kw):
 
 
 def test_version_and_features(env):
-    assert VERSION == Path(__file__).resolve().parents[1].joinpath("app/VERSION").read_text().strip() == "0.1.15"
+    assert VERSION == Path(__file__).resolve().parents[1].joinpath("app/VERSION").read_text().strip() == "0.1.16"
     for path in ("/api/version", "/api/config"):
         j = env.get(path).json()
         assert j["version"] == VERSION and {"bark", "archive", "edit"} <= set(j["features"])

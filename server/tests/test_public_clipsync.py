@@ -117,7 +117,8 @@ def test_clipsync_broadcast_dedup_history_and_direction(c):
     c.put(f"/api/devices/{D2}", json={"name": "Phone", "direction": "recv"})
     with c.websocket_connect(f"/ws?device={D2}") as ws:
         ws.receive_json()  # hello
-        r = c.post("/api/clipsync", json={"text": "复制的内容"}, headers={"X-Device-Id": D1})
+        # 缺省不记入私有；显式 save_history=true 才记
+        r = c.post("/api/clipsync", json={"text": "复制的内容", "save_history": True}, headers={"X-Device-Id": D1})
         assert r.status_code == 200 and r.json()["duplicate"] is False and r.json()["uuid"]
         evs = [ws.receive_json(), ws.receive_json()]
         clip = [e for e in evs if e["type"] == "clip"][0]
@@ -125,10 +126,14 @@ def test_clipsync_broadcast_dedup_history_and_direction(c):
         create = [e for e in evs if e["type"] == "create"][0]
         assert create["source"] == "clipsync" and create["visibility"] == "private"
     # 同内容再次复制：不重复传播、不重复记历史
-    r2 = c.post("/api/clipsync", json={"text": "复制的内容"}, headers={"X-Device-Id": D1})
+    r2 = c.post("/api/clipsync", json={"text": "复制的内容", "save_history": True}, headers={"X-Device-Id": D1})
     assert r2.json()["duplicate"] is True
     priv = c.get("/api/items", params={"scope": "private"}).json()["items"]
     assert [i["content"] for i in priv].count("复制的内容") == 1
+    # 缺省 / false：同步剪贴板但不进私有列表
+    r0 = c.post("/api/clipsync", json={"text": "仅同步不归档"}, headers={"X-Device-Id": D1})
+    assert r0.status_code == 200 and r0.json().get("uuid") is None
+    assert "仅同步不归档" not in [i.get("content") for i in c.get("/api/items", params={"scope": "private"}).json()["items"]]
     # 只接收的设备不能发送
     assert c.post("/api/clipsync", json={"text": "x"}, headers={"X-Device-Id": D2}).status_code == 403
     # 最新一条（LWW：后写覆盖）
@@ -226,8 +231,9 @@ def test_three_devices_same_account_see_each_other_and_ios_to_mac(c):
     with c.websocket_connect(f"/ws?device={mac}") as ws:
         ws.receive_json()
         c.post("/api/clipsync", json={"text": "iOS 复制"}, headers={"X-Device-Id": ios})
-        got = [ws.receive_json(), ws.receive_json()]
-        assert any(e["type"] == "clip" and e["text"] == "iOS 复制" and e["origin"] == ios for e in got)
+        # 缺省不记入私有 → 只有 clip 事件（不再有 create）
+        ev = ws.receive_json()
+        assert ev["type"] == "clip" and ev["text"] == "iOS 复制" and ev["origin"] == ios
     # 断线期间错过推送 → 客户端重连后 GET /api/clipsync 能补到
     assert c.get("/api/clipsync").json()["clip"]["text"] == "iOS 复制"
 
@@ -238,3 +244,15 @@ def test_other_account_does_not_see_devices(c):
     c.post("/api/register", json={"username": "zumin2", "password": "pass1234"})
     c.put(f"/api/devices/{D2}", json={"name": "Android"})
     assert [d["name"] for d in c.get("/api/devices").json()["devices"]] == ["Android"]  # 账号不同 = 互不可见（用户现场现象）
+
+
+def test_content_clipsync_source_dedupe(c):
+    """接收端记入私有：source=clipsync，同内容去重、不发 Bark。"""
+    r = c.post("/content", json={"content": "来自手机", "visibility": "private", "source": "clipsync", "expires_in": 0})
+    assert r.status_code == 200 and r.json()["uuid"] and r.json().get("duplicate") is not True
+    r2 = c.post("/content", json={"content": "来自手机", "visibility": "private", "source": "clipsync", "expires_in": 0})
+    assert r2.status_code == 200 and r2.json().get("duplicate") is True
+    assert r2.json()["uuid"] == r.json()["uuid"]
+    priv = [i for i in c.get("/api/items", params={"scope": "private"}).json()["items"] if i.get("content") == "来自手机"]
+    assert len(priv) == 1  # source 存在于存储/create 事件；列表 API 可不暴露
+    assert c.post("/content", json={"content": "x", "visibility": "private", "source": "nope"}).status_code == 400

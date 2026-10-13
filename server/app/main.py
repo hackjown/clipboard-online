@@ -1102,10 +1102,24 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             raise HTTPException(413, f"文本超过 {max_text // 1024} KB 限制")
         vis = parse_visibility(body.get("visibility") if isinstance(body, dict) else None)
         exp = parse_expires(body.get("expires_in") if isinstance(body, dict) else None, vis)
+        # 仅允许客户端声明 source=clipsync（多设备同步记入私有）；用于跳过 Bark，并按内容去重
+        src = body.get("source") if isinstance(body, dict) else None
+        if src is not None and src != "clipsync":
+            raise HTTPException(400, "source 无效")
+        if src == "clipsync" and vis == "private":
+            h = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for it in store.list_items():
+                if (it.get("owner_id") == me["id"] and it.get("source") == "clipsync"
+                        and it.get("type") == "text" and it.get("visibility") == "private"
+                        and hashlib.sha256((it.get("content") or "").encode("utf-8")).hexdigest() == h):
+                    return {"ok": True, "uuid": it["uuid"], "visibility": vis, "expires_at": it.get("expires_at"),
+                            "duplicate": True}
         uid = uuidlib.uuid4().hex
         item = {"uuid": uid, "type": "text", "content": content, "size": size, "created": time.time(),
                 "owner_id": me["id"], "owner_username": me["username"], "visibility": vis,
                 "expires_at": exp, "share_token": None, "share_expires_at": None, "mime": "text/plain"}
+        if src == "clipsync":
+            item["source"] = "clipsync"
         store.add_item(item)
         # optional tags on create
         tags = body.get("tags") if isinstance(body, dict) else None
@@ -1672,7 +1686,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         ev = {"type": "clip", **{k: clip[k] for k in ("text", "hash", "ts", "origin", "origin_name")}}
         await hub.broadcast(ev, public=False, owner_id=me["id"])
         uid = None
-        if not isinstance(body.get("save_history"), bool) or body.get("save_history"):
+        # 显式 true 才记入私有；缺省 / false = 不记（避免与「Mac 监听剪贴板」混淆：本机复制不应自动进列表）
+        if body.get("save_history") is True:
             uid = uuidlib.uuid4().hex
             item = {"uuid": uid, "type": "text", "content": text, "size": len(text.encode("utf-8")), "created": now,
                     "owner_id": me["id"], "owner_username": me["username"], "visibility": "private",

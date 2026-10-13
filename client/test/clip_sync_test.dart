@@ -21,6 +21,12 @@ void main() {
     expect(g.shouldSend('本机新复制'), isTrue);
   });
 
+  test('记入私有：本机发送永不带 save_history；仅远端接收可归档', () {
+    expect(clipSyncSaveHistoryOnSend(), isFalse);
+    expect(clipSyncShouldArchiveRemote(true), isTrue);
+    expect(clipSyncShouldArchiveRemote(false), isFalse);
+  });
+
   test('方向', () {
     expect(directionSends('both') && directionReceives('both'), isTrue);
     expect(directionSends('send') && !directionReceives('send'), isTrue);

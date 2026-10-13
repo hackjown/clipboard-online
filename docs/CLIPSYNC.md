@@ -19,7 +19,7 @@
 | 冲突 | LWW（最后写入者胜） | LWW，以服务器收到时间为准（避免设备时钟偏差）；客户端不让旧的覆盖新的 |
 | 同步方向 | 双向 / 只发送 / 只接收 / 关闭 | 同样四种，按设备设置 |
 | 敏感内容 | 识别密码管理器的 Concealed 标记 | Flutter 插件拿不到该标记 → 用本项目已有的「疑似密钥」启发式，默认跳过 |
-| 历史 | 本地 JSON 历史 + 快捷键面板 | 同步内容可选记入「我的私有」（所有已有功能：搜索、收藏、预览…） |
+| 历史 | 本地 JSON 历史 + 快捷键面板 | 可选：把**其他设备同步过来**的内容记入「我的私有」（本机自己的复制不自动进列表；Mac「监听剪贴板」是另一项） |
 | 加密 | TLS 1.3 mTLS 传输加密 | 依赖 HTTPS（请用 https 部署）；服务器可见内容，与本项目其他数据一致 |
 | 类型 | 文本 512 KiB / 图片 16 MiB / 文件 64 个 | **仅文本**，上限 512 KiB（与 lanecho 一致） |
 
@@ -43,5 +43,6 @@
 - `PUT /api/devices/{device_id}` `{name, platform, direction: both|send|recv|off}`（最多 50 台）
 - `DELETE /api/devices/{device_id}`
 - `GET /api/clipsync` → `{clip:{text,hash,ts,origin,origin_name}|null}`
-- `POST /api/clipsync`（需 `X-Device-Id`）`{text, save_history?}` → `{duplicate, uuid, clip}`；方向为 recv/off 的设备 403；超过 512 KB 413
+- `POST /api/clipsync`（需 `X-Device-Id`）`{text, save_history?}` → `{duplicate, uuid, clip}`；**仅当 `save_history: true` 时**记入私有（客户端发送路径固定传 false）；方向为 recv/off 的设备 403；超过 512 KB 413
+- 接收端归档：`POST /content` `{content, visibility:"private", source:"clipsync"}`（去重、不发 Bark）
 - WebSocket：`/ws?device=<id>`（在线状态）；事件 `clip`（只发给本人）、`devices`；同步产生的私有条目 `create` 事件带 `source:"clipsync"`（客户端不弹通知，服务器不发 Bark）

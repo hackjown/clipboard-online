@@ -36,12 +36,14 @@ class ClipboardWatch {
     enabled = true;
     _timer?.cancel();
     _timer = Timer.periodic(interval, (_) => _tick());
+    debugPrint('[clipboard_watch] started interval=${interval.inSeconds}s');
   }
 
   void stopWatch() {
     enabled = false;
     _timer?.cancel();
     _timer = null;
+    debugPrint('[clipboard_watch] stopped (timer cancelled)');
   }
 
   Future<void> _tick() async {

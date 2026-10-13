@@ -151,7 +151,7 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
       builder: (context, s, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Text('多设备剪贴板同步', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
         const SizedBox(height: 4),
-        const Text('一台设备上复制，你的其他设备上直接粘贴（经由本服务器中转，只在你自己的设备之间；同内容只传一次；同步记录进「我的私有」）。',
+        const Text('一台设备上复制，其他已登录设备的系统剪贴板自动更新（经本服务器中转）。\n这与 Mac 首页的「监听剪贴板」无关：监听是本机复制时弹窗询问是否上传到「我的私有」；关掉监听后本机复制不会进列表。',
             style: TextStyle(fontSize: 12.5)),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -185,7 +185,8 @@ class _ClipSyncSectionState extends State<ClipSyncSection> {
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
-          title: const Text('同步内容记入「我的私有」'),
+          title: const Text('把其他设备同步过来的内容记入「我的私有」'),
+          subtitle: const Text('只归档「别人复制、同步到本机」的文本；本机自己复制的不会进列表（本机要用列表请开 Mac「监听剪贴板」并确认上传）'),
           value: s.saveHistory,
           onChanged: _busy ? null : (v) => _save(s.copyWith(saveHistory: v)),
         ),

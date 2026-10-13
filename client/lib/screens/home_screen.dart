@@ -508,7 +508,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _clip.startWatch();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已开启 Mac 剪贴板监听（需系统权限）；变化时会询问是否上传为私有')),
+          const SnackBar(content: Text('已开启「监听剪贴板」：本机复制时会询问是否上传到私有（与「多设备同步」是两回事；关掉后本机复制不会自动进列表）')),
         );
       }
     } else {
@@ -556,7 +556,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             InkIconButton(
               plain: true,
               size: 40,
-              tooltip: _watchOn ? '关闭剪贴板监听' : '监听剪贴板',
+              tooltip: _watchOn ? '关闭监听（本机复制不再询问上传）' : '监听剪贴板（本机复制时询问是否上传私有）',
               onPressed: () => _toggleWatch(!_watchOn),
               icon: _watchOn ? Icons.content_paste_go : Icons.content_paste,
             ),

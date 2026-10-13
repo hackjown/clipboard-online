@@ -1018,7 +1018,7 @@
       if (!text || !text.trim()) { toast('内容为空', 'err'); return; }
       try {
         await api('/api/devices/' + encodeURIComponent(DEVICE_ID), { method: 'PUT', body: { name: '网页浏览器', platform: 'web', direction: 'send' } }).catch(() => {});
-        const r = await api('/api/clipsync', { method: 'POST', body: { text } });
+        const r = await api('/api/clipsync', { method: 'POST', body: { text, save_history: false } });
         toast(r.duplicate ? '内容与当前同步剪贴板相同' : '已同步到你的其他设备'); ta.value = ''; load();
       } catch (e) { toast(e.message, 'err'); }
     };
@@ -1107,7 +1107,7 @@
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.15` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.16` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 

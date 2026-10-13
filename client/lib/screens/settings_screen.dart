@@ -195,7 +195,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('平台说明'),
             subtitle: Text(
               isMac
-                  ? 'Mac：首页「快传」按钮进入快传页，支持拖放；可监听剪贴板；文件可「在访达中显示」。'
+                  ? 'Mac：首页「快传」可拖放上传；「监听剪贴板」= 本机复制时询问是否上传私有（关掉则本机复制不进列表）。多设备同步是另一项，见下方。'
                   : isIOS
                       ? 'iOS：首页「快传」按钮进入快传页选文件，或从微信/相册/文件「分享到剪贴板」（Share Extension）。条目「分享」可转出到微信。不支持后台剪贴板监听。'
                       : 'Android：快传选文件；其它 App「分享到剪贴板」；条目「分享」可转出到微信等。',

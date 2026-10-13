@@ -36,6 +36,10 @@ class ClipSyncSettings {
       );
 }
 
+/// 本机发出的同步永不写入「我的私有」；只有收到其他设备的内容且开启「记入私有」时才写入。
+bool clipSyncSaveHistoryOnSend() => false;
+bool clipSyncShouldArchiveRemote(bool saveHistory) => saveHistory;
+
 /// 回声抑制 + 去重的纯逻辑（可单测）：
 /// * 远端写进本机剪贴板的内容，下一次本机读取到时不能再发回去（lanecho 的 echo suppression）；
 /// * 同一内容只发送一次（一次复制只传播一次）。
@@ -291,7 +295,9 @@ class ClipSync {
     if (s.skipSensitive && isSensitive(text)) return; // 疑似密码 / 密钥：不离开本机
     if (text.length > 512 * 1024) return;
     try {
-      await api.postClip(text, saveHistory: s.saveHistory);
+      // 本机复制只同步到其他设备剪贴板，不记入「我的私有」（与 Mac「监听剪贴板」上传私有是两回事）
+      debugPrint('[clipsync] send local → postClip(save_history=false) len=${text.length}');
+      await api.postClip(text, saveHistory: clipSyncSaveHistoryOnSend());
       lastError.value = null;
       status.sentAt = DateTime.now();
       status.sentPreview = text.length > 30 ? '${text.substring(0, 30)}…' : text;
@@ -326,6 +332,15 @@ class ClipSync {
       status.receivedAt = DateTime.now();
       status.receivedFrom = clip.originName;
       _touch();
+      final archiveApi = _api;
+      if (clipSyncShouldArchiveRemote(settings.value.saveHistory) && archiveApi != null) {
+        debugPrint('[clipsync] archive remote from ${clip.originName} → private');
+        try {
+          await archiveApi.archiveClipSync(clip.text);
+        } catch (e) {
+          debugPrint('[clipsync] archive failed: $e');
+        }
+      }
       return true;
     } catch (e) {
       _err('写入本机剪贴板失败：$e');
@@ -372,7 +387,7 @@ class ClipSync {
     final t = await _readLocal();
     if (t == null || t.trim().isEmpty) return '本机剪贴板里没有文本';
     try {
-      final sent = await api.postClip(t, saveHistory: settings.value.saveHistory);
+      final sent = await api.postClip(t, saveHistory: clipSyncSaveHistoryOnSend());
       _guard.markRemote(t);
       return sent ? '已同步到你的其他设备' : '内容与当前同步剪贴板相同';
     } catch (e) {

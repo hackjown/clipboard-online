@@ -173,7 +173,7 @@ class _PopoverViewState extends State<PopoverView> {
                 valueListenable: _mb.watchOn,
                 builder: (_, on, __) => InkIconButton(
                   size: 36,
-                  tooltip: on ? '关闭剪贴板监听' : '监听剪贴板',
+                  tooltip: on ? '关闭监听（本机复制不再询问上传）' : '监听剪贴板（本机复制时询问是否上传私有）',
                   icon: on ? Icons.content_paste_go : Icons.content_paste,
                   color: on ? t.accent : null,
                   onPressed: _mb.toggleWatch,

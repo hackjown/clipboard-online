@@ -77,7 +77,7 @@ class MenuBarController with TrayListener, WindowListener {
       MenuItem(key: 'main', label: '打开主窗口'),
       MenuItem(key: 'quick', label: '快传'),
       MenuItem.separator(),
-      MenuItem.checkbox(key: 'watch', label: '监听剪贴板', checked: watchOn.value),
+      MenuItem.checkbox(key: 'watch', label: '监听剪贴板（询问是否上传私有）', checked: watchOn.value),
       MenuItem(key: 'settings', label: '设置'),
       MenuItem.separator(),
       MenuItem(key: 'quit', label: '退出'),

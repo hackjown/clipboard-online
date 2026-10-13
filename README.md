@@ -148,6 +148,12 @@ git push -u origin main
 - **Web 文件预览**：图片（缩放、上一张/下一张）、视频 / 音频（HTTP Range，206）、PDF（iframe）、文本 / 代码 / JSON（前 200KB，纯文本渲染）；分享页 `/s/<token>` 同样可预览。内联端点 `GET /download/<name>?inline=1`、`GET /s/<token>/file?inline=1` 仅对白名单类型内联，**html / svg / js 等一律强制下载**，并带 `nosniff` 与 CSP sandbox；私有 / 过期规则不变。
 - **客户端**：「纸与墨」主题、媒体预览、新图标、macOS 菜单栏模式，详见 `client/README.md`。
 
+## v0.1.16 — 关掉「监听剪贴板」后本机复制不再进私有列表
+
+- **根因**：多设备同步（clipsync）与 Mac「监听剪贴板」是两套逻辑。同步开启且「记入私有」默认开时，本机每秒读剪贴板并 `POST /api/clipsync`（`save_history=true`），服务器把本机复制写进「我的私有」——与监听开关无关。
+- **修复**：本机发出的同步一律不记入私有；「把其他设备同步过来的内容记入我的私有」只在收到远端 clip 时归档（`/content` + `source=clipsync`，按内容去重）。设置文案区分两项功能。
+- 监听开关本身一直会停掉 `ClipboardWatch` 定时器；问题不在监听，在 clipsync 记历史。
+
 ## v0.1.15
 
 - 与 v0.1.14 功能相同（v0.1.14 的 Android 构建因 AndroidManifest 重复属性失败，**没有发布 Release**）；修复了该重复属性后以 0.1.15 发布。
