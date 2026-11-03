@@ -1,0 +1,20 @@
+services:
+  clipboard-online:
+    image: ghcr.io/hackjown/clipboard-online/clipboard-online:latest
+    container_name: clipboard-online
+    # init: true 让 tini 作为 PID 1，回收健康检查产生的子进程，
+    # 否则每个探针都会变成永久僵尸（详见 server/Dockerfile 注释）
+    init: true
+    restart: unless-stopped
+    ports:
+      - "8100:8099"
+    volumes:
+      - ./data:/data
+    environment:
+      - CLIP_REGISTER=1
+    healthcheck:
+      # exec 形式：python 直接作为子进程运行，无 sh 中间层
+      test: ["CMD", "python", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:8099/api/config')"]
+      interval: 60s
+      timeout: 15s
+      start_period: 30s
