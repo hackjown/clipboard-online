@@ -43,7 +43,19 @@ class FileTransferService {
   }) async {
     final dir = await getTemporaryDirectory();
     final safe = p.basename(filename).replaceAll(RegExp(r'[^\w.\-\u4e00-\u9fff]+'), '_');
-    final out = File(p.join(dir.path, 'clip_$safe'));
+    // 缓存文件直接用原始文件名（iOS 分享面板显示的就是这个文件名，不应带 clip_ 前缀）；
+    // 同名冲突时追加序号，避免覆盖未清理的旧缓存。
+    var name = safe;
+    var out = File(p.join(dir.path, name));
+    var n = 1;
+    while (out.existsSync()) {
+      final dot = safe.lastIndexOf('.');
+      final stem = dot > 0 ? safe.substring(0, dot) : safe;
+      final ext = dot > 0 ? safe.substring(dot) : '';
+      name = '$stem ($n)$ext';
+      out = File(p.join(dir.path, name));
+      n++;
+    }
     final headers = <String, String>{};
     if (api.token != null) headers['Authorization'] = 'Bearer ${api.token}';
     final r = await http.get(Uri.parse(remoteUrl), headers: headers);

@@ -9,5 +9,7 @@ RUN useradd -r -u 10001 clip && mkdir -p /data && chown clip /data
 USER clip
 VOLUME ["/data"]
 EXPOSE 8099
-HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request as u;u.urlopen('http://127.0.0.1:8099/api/config')" || exit 1
+# exec 形式（JSON）：不经过 /bin/sh。容器主进程 uvicorn 不是 init、不会 wait() 子进程，
+# CMD-SHELL 每 30s 会泄漏一个僵尸 python 进程，最终耗尽 pids 并让探针无法启动（health 全 -1）。
+HEALTHCHECK --interval=30s --timeout=3s CMD ["python", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:8099/api/config')"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8099", "--proxy-headers", "--forwarded-allow-ips=*"]
