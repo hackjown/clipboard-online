@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -20,6 +21,7 @@ import '../services/file_transfer.dart';
 import '../services/menubar.dart';
 import '../services/notifier.dart';
 import '../services/share_inbox.dart';
+import '../services/vault_crypto.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 import '../widgets/item_card.dart';
@@ -27,6 +29,7 @@ import 'edit_text_screen.dart';
 import 'media_preview_screen.dart';
 import 'quick_transfer_screen.dart';
 import 'share_sheet.dart';
+import 'vault_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -184,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (mounted && _highlight == it.uuid) setState(() => _highlight = null);
     });
     // 图片 / 视频 / PDF / 压缩包：直接打开预览
-    const auto = {MediaKind.image, MediaKind.video, MediaKind.pdf, MediaKind.archive};
+    const auto = {MediaKind.image, MediaKind.video, MediaKind.pdf, MediaKind.archive, MediaKind.office};
     if (it.isFile && auto.contains(it.mediaKind) && mounted) {
       await Future<void>.delayed(const Duration(milliseconds: 450));
       if (!mounted) return;
@@ -245,9 +248,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _onClipApplied() {
     final c = ClipSync.instance.lastApplied.value;
     if (c == null || !mounted) return;
-    final preview = c.text.replaceAll('\n', ' ');
+    final msg = c.isImage
+        ? '已同步「${c.originName}」的图片到剪贴板'
+        : () {
+            final preview = c.text.replaceAll('\n', ' ');
+            return '已同步「${c.originName}」的剪贴板：${preview.length > 40 ? '${preview.substring(0, 40)}…' : preview}';
+          }();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('已同步「${c.originName}」的剪贴板：${preview.length > 40 ? '${preview.substring(0, 40)}…' : preview}'),
+      content: Text(msg),
       duration: const Duration(seconds: 2),
     ));
   }
@@ -257,7 +265,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ClipSync.instance.onRemote(msg);
       return;
     }
-    if (msg['type'] == 'devices') return;
+    if (msg['type'] == 'devices' || msg['type'] == 'vault_update') return;
     _refresh(silent: true);
     MenuBarController.instance.pulse.value++;
     // 剪贴板自动同步产生的历史不弹通知（每复制一次就响一次太吵）
@@ -489,6 +497,105 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  void _openVault() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VaultScreen(api: widget.api, clipWatch: _clip),
+    ));
+  }
+
+  Future<void> _editFileDialog(ClipItem it) async {
+    final fnCtrl = TextEditingController(text: it.filename ?? '');
+    final noteCtrl = TextEditingController(text: it.note);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('重命名与备注'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: fnCtrl, decoration: const InputDecoration(labelText: '文件名', border: OutlineInputBorder())),
+          const SizedBox(height: 10),
+          TextField(controller: noteCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '文件备注（支持搜索）', border: OutlineInputBorder())),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('保存')),
+        ],
+      ),
+    );
+    final fn = fnCtrl.text.trim();
+    final note = noteCtrl.text.trim();
+    fnCtrl.dispose();
+    noteCtrl.dispose();
+    if (ok != true || fn.isEmpty) return;
+    try {
+      await widget.api.editFile(it.uuid, filename: fn, note: note);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存')));
+        _refresh(silent: true);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+    }
+  }
+
+  Future<void> _decryptItemDialog(ClipItem it) async {
+    final pwCtrl = TextEditingController();
+    final pw = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('输入解密口令'),
+        content: TextField(
+          controller: pwCtrl,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '口令', border: OutlineInputBorder()),
+          onSubmitted: (v) => Navigator.pop(c, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(c, pwCtrl.text), child: const Text('解密')),
+        ],
+      ),
+    );
+    pwCtrl.dispose();
+    if (pw == null || pw.isEmpty) return;
+    try {
+      final raw = jsonDecode(it.content ?? '') as Map<String, dynamic>;
+      final env = VaultEnvelope.fromJson(raw);
+      final salt = Uint8List.fromList(base64Decode(env.salt));
+      final key = await compute(
+        deriveVaultKeyIsolate,
+        VaultDeriveArgs(password: pw, salt: salt, iterations: env.iterations),
+      );
+      final decMap = await VaultCrypto.decryptRawJson(env, key);
+      final items = (decMap['items'] as List?) ?? const [];
+      final first = items.isNotEmpty && items.first is Map ? items.first as Map : const {};
+      final shown = (first['text'] ?? first['notes'] ?? first['title'] ?? '').toString();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('🔓 解密内容'),
+          content: SingleChildScrollView(child: SelectableText(shown)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c), child: const Text('关闭')),
+            FilledButton(
+              onPressed: () async {
+                ClipSync.instance.suppressLocalCopy(shown);
+                _clip.suppressText(shown);
+                await _clip.copyText(shown);
+                if (c.mounted) Navigator.pop(c);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('明文已安全复制（不同步）')));
+              },
+              child: const Text('安全复制'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('解密失败：口令错误或数据损坏')));
+    }
+  }
+
   void _openQuickTransfer() {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => QuickTransferScreen(
@@ -560,6 +667,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               onPressed: () => _toggleWatch(!_watchOn),
               icon: _watchOn ? Icons.content_paste_go : Icons.content_paste,
             ),
+          InkIconButton(plain: true, size: 40, tooltip: '密码库（E2EE）', onPressed: _openVault, icon: Icons.vpn_key_outlined),
           InkIconButton(plain: true, size: 40, tooltip: '从剪贴板导入', onPressed: () => _clip.importOnce(), icon: Icons.paste),
           InkIconButton(plain: true, size: 40, tooltip: '设置', onPressed: widget.onOpenSettings, icon: Icons.settings_outlined),
           InkIconButton(plain: true, size: 40, tooltip: '退出', onPressed: widget.onLogout, icon: Icons.logout),
@@ -695,12 +803,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         final card = ItemCard(
                           item: it,
                           imageUrl: it.mediaKind == MediaKind.image && it.filename != null
-                              ? widget.api.downloadUrl(it.filename!)
+                              ? (it.thumbUrl != null ? widget.api.thumbUrl(it.uuid) : widget.api.downloadUrl(it.filename!))
                               : null,
                           headers: widget.api.authHeaders,
-                          onOpen: () => Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => MediaPreviewScreen(api: widget.api, item: it)),
-                          ),
+                          onOpen: () {
+                            if (it.isText && it.encrypted) {
+                              _decryptItemDialog(it);
+                              return;
+                            }
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => MediaPreviewScreen(api: widget.api, item: it)),
+                            );
+                          },
                           onCopy: () async {
                             if (it.isText) {
                               await _clip.copyText(it.content ?? '');
@@ -717,8 +831,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   final ok = await showDialog<bool>(
                                     context: context,
                                     builder: (c) => AlertDialog(
-                                      title: const Text('删除这条内容？'),
-                                      content: const Text('删除后无法恢复。'),
+                                      title: const Text('移入回收站？'),
+                                      content: const Text('条目将在回收站保留 7 天，可随时撤销恢复。'),
                                       actions: [
                                         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
                                         FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('删除')),
@@ -728,18 +842,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   if (ok == true) {
                                     await widget.api.delete(it.uuid);
                                     _refresh();
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                        content: const Text('已移入回收站'),
+                                        duration: const Duration(seconds: 6),
+                                        action: SnackBarAction(
+                                          label: '撤销',
+                                          onPressed: () async {
+                                            await widget.api.restoreTrash(it.uuid);
+                                            _refresh();
+                                          },
+                                        ),
+                                      ));
+                                    }
                                   }
                                 }
                               : null,
                           onShareLink: it.mine
                               ? () => showShareSheet(context, api: widget.api, item: it)
                               : null,
-                          onEdit: it.mine && it.isText
+                          onEdit: it.mine
                               ? () async {
-                                  final saved = await Navigator.of(context).push<bool>(
-                                    MaterialPageRoute(builder: (_) => EditTextScreen(api: widget.api, item: it)),
-                                  );
-                                  if (saved == true) _refresh(silent: true);
+                                  if (it.isFile) {
+                                    await _editFileDialog(it);
+                                  } else if (it.isText && !it.encrypted) {
+                                    final saved = await Navigator.of(context).push<bool>(
+                                      MaterialPageRoute(builder: (_) => EditTextScreen(api: widget.api, item: it)),
+                                    );
+                                    if (saved == true) _refresh(silent: true);
+                                  }
                                 }
                               : null,
                           onSystemShare: () => _systemShare(it),

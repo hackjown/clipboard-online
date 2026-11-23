@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import ipaddress
 import logging
@@ -17,19 +18,23 @@ import threading
 import time
 import unicodedata
 import uuid as uuidlib
+import zipfile
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 import qrcode
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.background import BackgroundTask
 
 from .archive import ArchiveError, is_archive, list_archive
+from .office import OfficeError, is_office, parse_office
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -76,12 +81,12 @@ _PREVIEW_VIDEO = {"mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", 
                   "ogv": "video/ogg"}
 _PREVIEW_AUDIO = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac", "wav": "audio/wav",
                   "ogg": "audio/ogg", "oga": "audio/ogg", "opus": "audio/ogg", "flac": "audio/flac"}
-_PREVIEW_TEXT = {"txt", "md", "markdown", "json", "log", "csv", "tsv", "yaml", "yml", "ini", "toml", "conf",
+_PREVIEW_TEXT = {"txt", "md", "markdown", "json", "log", "yaml", "yml", "ini", "toml", "conf",
                  "py", "js", "ts", "css", "sh", "c", "h", "cpp", "java", "go", "rs", "sql", "xml", "rb", "php"}
 
 
 def preview_kind(filename: str) -> Optional[str]:
-    """image / video / audio / pdf / text；不在白名单返回 None（只能下载）。"""
+    """image / video / audio / pdf / text / archive / office；不在白名单返回 None（只能下载）。"""
     ext = filename.rpartition(".")[2].lower() if "." in (filename or "") else ""
     if ext in _PREVIEW_IMAGE:
         return "image"
@@ -93,6 +98,8 @@ def preview_kind(filename: str) -> Optional[str]:
         return "pdf"
     if ext in _PREVIEW_TEXT:
         return "text"
+    if is_office(filename or ""):
+        return "office"  # 结构化纯 Python 预览（见 office.py）
     if is_archive(filename or ""):
         return "archive"  # 只列目录，不解压（见 archive.py）
     return None
@@ -156,7 +163,13 @@ def guess_mime(filename: str) -> str:
     return {
         "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp",
         "gif": "image/gif", "pdf": "application/pdf", "txt": "text/plain", "json": "application/json",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls": "application/vnd.ms-excel",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "ppt": "application/vnd.ms-powerpoint",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "zip": "application/zip", "mp4": "video/mp4",
     }.get(ext, "application/octet-stream")
 
@@ -209,6 +222,8 @@ class Store:
     def __init__(self, data_dir: Path):
         self.dir = data_dir
         self.uploads = data_dir / "uploads"
+        self.thumbs = data_dir / "thumbs"
+        self.clipsync_img_dir = data_dir / "clipsync_img"
         self.items_path = data_dir / "items.json"
         self.users_path = data_dir / "users.json"
         self.meta_path = data_dir / "user_meta.json"
@@ -216,8 +231,11 @@ class Store:
         self.bark_path = data_dir / "bark.json"
         self.devices_path = data_dir / "devices.json"
         self.clipsync_path = data_dir / "clipsync.json"
+        self.vaults_path = data_dir / "vaults.json"
         self.lock = threading.RLock()
         self.uploads.mkdir(parents=True, exist_ok=True)
+        self.thumbs.mkdir(parents=True, exist_ok=True)
+        self.clipsync_img_dir.mkdir(parents=True, exist_ok=True)
         for p, default in ((self.items_path, []), (self.users_path, []), (self.meta_path, {}), (self.og_path, {}), (self.bark_path, {})):
             if not p.exists():
                 self._write_json(p, default)
@@ -359,6 +377,37 @@ class Store:
             d[user_id] = clip
             self._write_json(self.clipsync_path, d)
 
+    # ---- E2EE 密码保险箱（仅存储客户端加密后的密文信封，绝不接触明文/主密码）----
+    def get_vault(self, user_id: str) -> Optional[dict]:
+        with self.lock:
+            d = self._read_json(self.vaults_path)
+            v = d.get(user_id) if isinstance(d, dict) else None
+            return dict(v) if isinstance(v, dict) else None
+
+    def save_vault(self, user_id: str, envelope: dict, expected_rev: Optional[int]) -> tuple[dict, bool]:
+        """乐观锁保存密文信封；返回 (vault, conflict)。"""
+        with self.lock:
+            d = self._read_json(self.vaults_path)
+            if not isinstance(d, dict):
+                d = {}
+            cur = d.get(user_id) if isinstance(d.get(user_id), dict) else None
+            cur_rev = int(cur.get("rev", 0)) if cur else 0
+            if expected_rev is not None and expected_rev != cur_rev:
+                return (dict(cur) if cur else {}, True)
+            saved = dict(envelope, rev=cur_rev + 1, updated_at=time.time())
+            d[user_id] = saved
+            self._write_json(self.vaults_path, d)
+            return (dict(saved), False)
+
+    def delete_vault(self, user_id: str) -> bool:
+        with self.lock:
+            d = self._read_json(self.vaults_path)
+            if not isinstance(d, dict) or user_id not in d:
+                return False
+            d.pop(user_id, None)
+            self._write_json(self.vaults_path, d)
+            return True
+
     def get_bark(self, user_id: str) -> dict:
         with self.lock:
             allb = self._read_json(self.bark_path)
@@ -380,6 +429,8 @@ class Store:
             self._write_json(self.bark_path, allb)
 
     # items
+    TRASH_TTL = 7 * 86400  # 回收站保留 7 天
+
     def _raw_items(self) -> list[dict]:
         data = self._read_json(self.items_path)
         return data if isinstance(data, list) else []
@@ -389,32 +440,46 @@ class Store:
         with self.lock:
             items = self._raw_items()
             keep, gone = [], []
+            dirty = False
             for i in items:
                 exp = i.get("expires_at")
                 sex = i.get("share_expires_at")
+                del_at = i.get("deleted_at")
                 # revoke expired share tokens
                 if sex and sex <= now and i.get("share_token"):
                     i["share_token"] = None
                     i["share_expires_at"] = None
-                if exp and exp <= now:
+                    i["share_password_hash"] = None
+                    i["share_max_views"] = None
+                    i["share_views"] = 0
+                    dirty = True
+                if (exp and exp <= now) or (del_at and now - float(del_at) >= self.TRASH_TTL):
                     gone.append(i)
                 else:
                     keep.append(i)
             for i in gone:
                 self._unlink(i)
-            if gone or len(keep) != len(items):
+            if gone or dirty or len(keep) != len(items):
                 self._write_json(self.items_path, keep)
             return len(gone)
 
-    def list_items(self) -> list[dict]:
+    def list_items(self, *, include_trash: bool = False) -> list[dict]:
         self.purge_expired()
         with self.lock:
             items = self._raw_items()
+        if not include_trash:
+            items = [i for i in items if not i.get("deleted_at")]
         return sorted(items, key=lambda i: i.get("created", 0), reverse=True)
 
-    def get_item(self, uid: str) -> Optional[dict]:
+    def list_trash(self, owner_id: str) -> list[dict]:
         self.purge_expired()
-        for i in self.list_items():
+        with self.lock:
+            items = [i for i in self._raw_items() if i.get("deleted_at") and i.get("owner_id") == owner_id]
+        return sorted(items, key=lambda i: i.get("deleted_at", 0), reverse=True)
+
+    def get_item(self, uid: str, *, include_trash: bool = False) -> Optional[dict]:
+        self.purge_expired()
+        for i in self.list_items(include_trash=include_trash):
             if i.get("uuid") == uid:
                 return i
         return None
@@ -429,6 +494,29 @@ class Store:
                     continue
                 return i
         return None
+
+    def consume_share_view(self, uid: str) -> Optional[dict]:
+        """限次分享计数 +1；若达到上限则立即焚毁分享链接并返回 None。"""
+        with self.lock:
+            items = self._raw_items()
+            for i in items:
+                if i.get("uuid") == uid:
+                    mv = i.get("share_max_views")
+                    if not mv:
+                        return i
+                    views = int(i.get("share_views") or 0)
+                    if views >= int(mv):
+                        i["share_token"] = None
+                        i["share_expires_at"] = None
+                        i["share_password_hash"] = None
+                        i["share_max_views"] = None
+                        i["share_views"] = 0
+                        self._write_json(self.items_path, items)
+                        return None
+                    i["share_views"] = views + 1
+                    self._write_json(self.items_path, items)
+                    return dict(i)
+            return None
 
     def add_item(self, item: dict) -> None:
         with self.lock:
@@ -446,6 +534,29 @@ class Store:
                     return i
             return None
 
+    def rename_file(self, uid: str, owner_id: str, new_safe: str) -> Optional[dict]:
+        with self.lock:
+            items = self._raw_items()
+            for i in items:
+                if i.get("uuid") == uid and i.get("owner_id") == owner_id and i.get("type") == "file" and not i.get("deleted_at"):
+                    old_name = i.get("filename") or ""
+                    if new_safe == old_name:
+                        return dict(i)
+                    old_path = self.file_path(old_name)
+                    if not old_path or not old_path.is_file():
+                        return None
+                    final_name = self.unique_name(new_safe)
+                    new_path = self.file_path(final_name)
+                    if not new_path:
+                        return None
+                    os.replace(old_path, new_path)
+                    i["filename"] = final_name
+                    i["mime"] = guess_mime(final_name)
+                    i["updated"] = time.time()
+                    self._write_json(self.items_path, items)
+                    return dict(i)
+            return None
+
     def file_path(self, name: str) -> Optional[Path]:
         p = (self.uploads / name).resolve()
         try:
@@ -453,6 +564,14 @@ class Store:
         except ValueError:
             return None
         return p
+
+    def thumb_path(self, uid: str) -> Path:
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "", uid) or "x"
+        return self.thumbs / f"{safe_id}.webp"
+
+    def clipsync_img_path(self, user_id: str) -> Path:
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "", user_id) or "u"
+        return self.clipsync_img_dir / f"{safe_id}.png"
 
     def unique_name(self, safe: str) -> str:
         with self.lock:
@@ -479,6 +598,50 @@ class Store:
                     p.unlink()
                 except OSError:
                     pass
+        if item.get("uuid"):
+            tp = self.thumb_path(item["uuid"])
+            if tp.is_file():
+                try:
+                    tp.unlink()
+                except OSError:
+                    pass
+
+    def soft_delete(self, uid: str, *, owner_id: str) -> Optional[dict]:
+        with self.lock:
+            items = self._raw_items()
+            for i in items:
+                if i.get("uuid") == uid and i.get("owner_id") == owner_id and not i.get("deleted_at"):
+                    i["deleted_at"] = time.time()
+                    i["share_token"] = None
+                    i["share_expires_at"] = None
+                    i["share_password_hash"] = None
+                    i["share_max_views"] = None
+                    i["share_views"] = 0
+                    self._write_json(self.items_path, items)
+                    return dict(i)
+            return None
+
+    def restore(self, uid: str, *, owner_id: str) -> Optional[dict]:
+        with self.lock:
+            items = self._raw_items()
+            for i in items:
+                if i.get("uuid") == uid and i.get("owner_id") == owner_id and i.get("deleted_at"):
+                    i.pop("deleted_at", None)
+                    self._write_json(self.items_path, items)
+                    return dict(i)
+            return None
+
+    def empty_trash(self, owner_id: str) -> int:
+        with self.lock:
+            items = self._raw_items()
+            keep, gone = [], []
+            for i in items:
+                (gone if i.get("deleted_at") and i.get("owner_id") == owner_id else keep).append(i)
+            for i in gone:
+                self._unlink(i)
+            if gone:
+                self._write_json(self.items_path, keep)
+            return len(gone)
 
     def delete(self, uid: str, *, owner_id: str) -> bool:
         with self.lock:
@@ -537,7 +700,11 @@ try:
 except OSError:  # pragma: no cover
     VERSION = "dev"
 # 功能清单：客户端据此判断服务器是否过旧（旧镜像没有这些路由时会返回裸的 404 Not Found）
-FEATURES = ["bark", "archive", "edit", "preview", "share", "ws", "tags", "version", "clipsync", "devices"]
+FEATURES = [
+    "bark", "archive", "office", "vault", "edit", "preview", "share", "share_lock",
+    "ws", "tags", "version", "clipsync", "image_clipsync", "devices",
+    "thumb", "pair", "trash", "batch", "export", "e2ee_item",
+]
 
 
 def _ip_blocked(ip: str) -> bool:
@@ -880,21 +1047,28 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             "expires_at": i.get("expires_at"),
             "share_token": i.get("share_token") if (me and i.get("owner_id") == me["id"]) else None,
             "share_expires_at": i.get("share_expires_at") if (me and i.get("owner_id") == me["id"]) else None,
+            "share_has_password": bool(i.get("share_password_hash")) if (me and i.get("owner_id") == me["id"]) else False,
+            "share_max_views": i.get("share_max_views") if (me and i.get("owner_id") == me["id"]) else None,
+            "share_views": int(i.get("share_views") or 0) if (me and i.get("owner_id") == me["id"]) else 0,
             "has_share": bool(i.get("share_token")),
             "updated": i.get("updated"),
+            "note": i.get("note") or "",
+            "encrypted": bool(i.get("encrypted")),
             "mime": i.get("mime") or (guess_mime(i.get("filename", "")) if i["type"] == "file" else "text/plain"),
             "is_image": False,
             "favorite": False, "pinned": False, "tags": [],
         }
         if i["type"] == "text":
             out["content"] = i.get("content", "")
-            out["is_url"] = bool(_URL_ONLY.match((i.get("content") or "").strip()))
-            out["looks_md"] = looks_like_md(i.get("content") or "")
+            out["is_url"] = (not out["encrypted"]) and bool(_URL_ONLY.match((i.get("content") or "").strip()))
+            out["looks_md"] = (not out["encrypted"]) and looks_like_md(i.get("content") or "")
         else:
             out["filename"] = i.get("filename", "")
             fn = i.get("filename", "")
             out["ext"] = fn.rpartition(".")[2].lower() if "." in fn else ""
             out["is_image"] = out["ext"] in IMAGE_EXTS or (out["mime"] or "").startswith("image/")
+            if out["is_image"]:
+                out["thumb_url"] = f"/api/items/{uid}/thumb"
             out["preview"] = preview_kind(fn)
         if me and meta:
             out["favorite"] = uid in meta.get("favorites", [])
@@ -1077,7 +1251,10 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             items = [i for i in items if tag in (meta.get("tags") or {}).get(i["uuid"], [])]
         ql = q.strip().lower()
         if ql:
-            items = [i for i in items if ql in (i.get("content") or i.get("filename") or i.get("owner_username") or "").lower()
+            items = [i for i in items if ql in (i.get("content") or "").lower()
+                     or ql in (i.get("filename") or "").lower()
+                     or ql in (i.get("note") or "").lower()
+                     or ql in (i.get("owner_username") or "").lower()
                      or (meta and any(ql in t.lower() for t in (meta.get("tags") or {}).get(i["uuid"], [])))]
 
         # pin sort: pinned first (personal), then created desc
@@ -1115,9 +1292,12 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
                     return {"ok": True, "uuid": it["uuid"], "visibility": vis, "expires_at": it.get("expires_at"),
                             "duplicate": True}
         uid = uuidlib.uuid4().hex
+        encrypted = bool(body.get("encrypted") is True) if isinstance(body, dict) else False
         item = {"uuid": uid, "type": "text", "content": content, "size": size, "created": time.time(),
                 "owner_id": me["id"], "owner_username": me["username"], "visibility": vis,
                 "expires_at": exp, "share_token": None, "share_expires_at": None, "mime": "text/plain"}
+        if encrypted:
+            item["encrypted"] = True
         if src == "clipsync":
             item["source"] = "clipsync"
         store.add_item(item)
@@ -1194,22 +1374,221 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         uid = body.get("uuid") if isinstance(body, dict) else None
         if not isinstance(uid, str):
             raise HTTPException(400, "缺少 uuid")
-        item = store.get_item(uid)
+        permanent = bool(body.get("permanent") is True) if isinstance(body, dict) else False
+        item = store.get_item(uid, include_trash=permanent)
         if not item:
             raise HTTPException(404, "条目不存在")
         if item.get("owner_id") != me["id"]:
             raise HTTPException(403, "只能删除自己上传的内容")
         vis, oid = item.get("visibility"), item.get("owner_id")
-        if not store.delete(uid, owner_id=me["id"]):
-            raise HTTPException(404, "条目不存在")
-        # cleanup meta refs
-        meta = store.get_meta(me["id"])
-        meta["favorites"] = [x for x in meta["favorites"] if x != uid]
-        meta["pins"] = [x for x in meta["pins"] if x != uid]
-        meta["tags"].pop(uid, None)
-        store.save_meta(me["id"], meta)
+        if permanent:
+            if not store.delete(uid, owner_id=me["id"]):
+                raise HTTPException(404, "条目不存在")
+            meta = store.get_meta(me["id"])
+            meta["favorites"] = [x for x in meta["favorites"] if x != uid]
+            meta["pins"] = [x for x in meta["pins"] if x != uid]
+            meta["tags"].pop(uid, None)
+            store.save_meta(me["id"], meta)
+        else:
+            if not store.soft_delete(uid, owner_id=me["id"]):
+                raise HTTPException(404, "条目不存在")
         await emit("delete", {"uuid": uid, "visibility": vis, "owner_id": oid})
-        return {"ok": True}
+        return {"ok": True, "trashed": not permanent, "uuid": uid}
+
+    # ---- 回收站（软删 7 天保留 / 撤销恢复 / 彻底清空）----
+    @app.get("/api/trash")
+    def api_trash(request: Request):
+        me = require_user(request)
+        meta = store.get_meta(me["id"])
+        items = store.list_trash(me["id"])
+        out = []
+        for i in items:
+            d = public_item(i, me, meta)
+            d["deleted_at"] = i.get("deleted_at")
+            out.append(d)
+        return {"ok": True, "items": out, "ttl_days": store.TRASH_TTL // 86400}
+
+    @app.post("/api/trash/{uid}/restore")
+    async def api_trash_restore(request: Request, uid: str):
+        me = require_user(request)
+        restored = store.restore(uid, owner_id=me["id"])
+        if not restored:
+            raise HTTPException(404, "回收站中未找到该条目")
+        await emit("create", restored)
+        return {"ok": True, "item": public_item(restored, me, store.get_meta(me["id"]))}
+
+    @app.post("/api/trash/empty")
+    async def api_trash_empty(request: Request):
+        me = require_user(request)
+        n = store.empty_trash(me["id"])
+        return {"ok": True, "removed": n}
+
+    # ---- 批量管理（批量删/恢复/打标签/改可见性）& 打包下载 ZIP ----
+    @app.post("/api/items/batch")
+    async def api_items_batch(request: Request):
+        me = require_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求格式错误")
+        action = str(body.get("action") or "").lower()
+        uuids = body.get("uuids")
+        if not isinstance(uuids, list) or not uuids or len(uuids) > 200:
+            raise HTTPException(400, "uuids 须为 1~200 条数组")
+        uids = [str(u) for u in uuids if isinstance(u, str)]
+        affected = 0
+        if action == "delete":
+            permanent = bool(body.get("permanent") is True)
+            for u in uids:
+                if permanent:
+                    if store.delete(u, owner_id=me["id"]):
+                        affected += 1
+                else:
+                    if store.soft_delete(u, owner_id=me["id"]):
+                        affected += 1
+            await emit("clear", owner_id=me["id"], visibility="private")
+            await emit("clear", owner_id=me["id"], visibility="public")
+        elif action == "restore":
+            for u in uids:
+                if store.restore(u, owner_id=me["id"]):
+                    affected += 1
+            await emit("clear", owner_id=me["id"], visibility="private")
+        elif action == "tag":
+            raw_tags = body.get("tags")
+            if not isinstance(raw_tags, list):
+                raise HTTPException(400, "tags 须为数组")
+            add_tags = [str(t).strip()[:32] for t in raw_tags if str(t).strip()][:8]
+            meta = store.get_meta(me["id"])
+            for u in uids:
+                it = store.get_item(u)
+                if it and it.get("owner_id") == me["id"]:
+                    cur = list(meta["tags"].get(u) or [])
+                    for tg in add_tags:
+                        if tg not in cur and len(cur) < 8:
+                            cur.append(tg)
+                    meta["tags"][u] = cur
+                    affected += 1
+            store.save_meta(me["id"], meta)
+            await emit("clear", owner_id=me["id"], visibility="private")
+        elif action == "visibility":
+            vis = parse_visibility(body.get("visibility"))
+            for u in uids:
+                it = store.get_item(u)
+                if it and it.get("owner_id") == me["id"] and it.get("visibility") != vis:
+                    store.update_item(u, visibility=vis, expires_at=parse_expires(-1, vis), updated=time.time())
+                    affected += 1
+            await emit("clear", owner_id=me["id"], visibility="public")
+            await emit("clear", owner_id=me["id"], visibility="private")
+        else:
+            raise HTTPException(400, "不支持的批量操作")
+        return {"ok": True, "affected": affected}
+
+    @app.post("/api/items/zip")
+    async def api_items_zip(request: Request):
+        me = current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        uuids = body.get("uuids") if isinstance(body, dict) else None
+        if not isinstance(uuids, list) or not uuids or len(uuids) > 100:
+            raise HTTPException(400, "请选择 1~100 条内容打包")
+        selected = []
+        total_bytes = 0
+        for u in uuids:
+            if not isinstance(u, str):
+                continue
+            it = store.get_item(u)
+            if not it or not visible_to(it, me):
+                continue
+            total_bytes += int(it.get("size") or 0)
+            if total_bytes > 500 * 1024 * 1024:
+                raise HTTPException(413, "打包总大小超过 500 MB 限制")
+            selected.append(it)
+        if not selected:
+            raise HTTPException(404, "没有可打包的可见条目")
+        fd, tmp = tempfile.mkstemp(prefix="clip-batch-", suffix=".zip")
+        os.close(fd)
+        used_names: set[str] = set()
+
+        def uniq(name: str) -> str:
+            if name not in used_names:
+                used_names.add(name)
+                return name
+            stem, dot, ext = name.rpartition(".")
+            if not dot or not stem:
+                stem, ext = name, ""
+            else:
+                ext = "." + ext
+            n = 1
+            while f"{stem}_{n}{ext}" in used_names:
+                n += 1
+            out = f"{stem}_{n}{ext}"
+            used_names.add(out)
+            return out
+
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx, it in enumerate(selected, start=1):
+                    if it.get("type") == "text":
+                        zf.writestr(uniq(f"text-{idx}-{it['uuid'][:8]}.txt"), (it.get("content") or "").encode("utf-8"))
+                    else:
+                        fn = it.get("filename") or f"file-{idx}"
+                        fp = store.file_path(fn)
+                        if fp and fp.is_file():
+                            zf.write(fp, arcname=uniq(fn))
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise HTTPException(500, "打包失败")
+        dl_name = f"clipboard-batch-{datetime.now().strftime('%Y%m%d-%H%M')}.zip"
+        return FileResponse(
+            tmp, filename=dl_name, media_type="application/zip", content_disposition_type="attachment",
+            background=BackgroundTask(lambda p=tmp: os.path.exists(p) and os.unlink(p)),
+        )
+
+    # ---- 图片缩略图（按需生成并缓存 WebP，减轻列表流量）----
+    @app.get("/api/items/{uid}/thumb")
+    def item_thumb(request: Request, uid: str):
+        me = current_user(request)
+        item = store.get_item(uid)
+        if not item or item.get("type") != "file":
+            raise HTTPException(404, "条目不存在")
+        if not visible_to(item, me):
+            raise HTTPException(403, "无权查看此文件")
+        fn = item.get("filename") or ""
+        ext = fn.rpartition(".")[2].lower() if "." in fn else ""
+        if ext not in IMAGE_EXTS:
+            raise HTTPException(404, "不是图片文件")
+        src = store.file_path(fn)
+        if not src or not src.is_file():
+            raise HTTPException(404, "文件不存在")
+        tp = store.thumb_path(uid)
+        if not tp.is_file() or tp.stat().st_mtime < src.stat().st_mtime:
+            try:
+                old_max = Image.MAX_IMAGE_PIXELS
+                Image.MAX_IMAGE_PIXELS = 40_000_000
+                try:
+                    with Image.open(src) as im:
+                        im = ImageOps.exif_transpose(im)
+                        im.thumbnail((480, 480))
+                        if im.mode not in ("RGB", "RGBA"):
+                            im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+                        tmp_tp = tp.with_suffix(".tmp.webp")
+                        im.save(tmp_tp, format="WEBP", quality=78, method=4)
+                        os.replace(tmp_tp, tp)
+                finally:
+                    Image.MAX_IMAGE_PIXELS = old_max
+            except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+                return serve_file(src, fn, item.get("mime"), True)
+        return FileResponse(
+            tp, media_type="image/webp",
+            headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"},
+        )
 
     async def _clear_body(request: Request) -> None:
         try:
@@ -1297,18 +1676,16 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             raise HTTPException(404, "文件不存在")
         return serve_file(path, filename, item.get("mime"), bool(inline))
 
-    # ---- share ----
+    # ---- edit / share ----
     @app.patch("/api/items/{uid}")
     async def edit_item(request: Request, uid: str):
-        """编辑文本条目（仅所有者）：content / visibility / expires_in / tags；保留分享令牌。"""
+        """编辑条目（仅所有者）：文本可改 content；文件可重命名 filename 与写备注 note；均可改 visibility / expires_in / tags。"""
         me = require_user(request)
         item = store.get_item(uid)
         if not item:
             raise HTTPException(404, "条目不存在或已过期")
         if item.get("owner_id") != me["id"]:
             raise HTTPException(403, "只能编辑自己的内容")
-        if item.get("type") != "text":
-            raise HTTPException(400, "只有文本条目可以编辑")
         try:
             body = await request.json()
         except Exception:
@@ -1316,7 +1693,10 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         if not isinstance(body, dict):
             raise HTTPException(400, "请求格式错误")
         fields: dict[str, Any] = {}
+        renamed = False
         if "content" in body:
+            if item.get("type") != "text":
+                raise HTTPException(400, "只有文本条目可以编辑正文")
             content = body["content"]
             if not isinstance(content, str) or not content.strip():
                 raise HTTPException(400, "内容不能为空")
@@ -1325,6 +1705,26 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
                 raise HTTPException(413, f"文本超过 {max_text // 1024} KB 限制")
             fields["content"] = content
             fields["size"] = size
+        if "note" in body:
+            note = body["note"]
+            if note is None:
+                fields["note"] = ""
+            elif isinstance(note, str):
+                fields["note"] = note.strip()[:2000]
+            else:
+                raise HTTPException(400, "note 须为字符串")
+        if "filename" in body:
+            if item.get("type") != "file":
+                raise HTTPException(400, "只有文件条目可以重命名")
+            fn_raw = body["filename"]
+            if not isinstance(fn_raw, str) or not fn_raw.strip():
+                raise HTTPException(400, "文件名不能为空")
+            safe = sanitize_filename(fn_raw)
+            res_ren = store.rename_file(uid, me["id"], safe)
+            if not res_ren:
+                raise HTTPException(404, "文件不存在")
+            item = res_ren
+            renamed = True
         vis = item.get("visibility", "private")
         if "visibility" in body:
             vis = parse_visibility(body.get("visibility"))
@@ -1350,7 +1750,7 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             else:
                 meta["tags"].pop(uid, None)
             store.save_meta(me["id"], meta)
-        if not fields and "tags" not in body:
+        if not fields and "tags" not in body and not renamed:
             raise HTTPException(400, "没有可更新的字段")
         fields["updated"] = time.time()
         old_vis = item.get("visibility")
@@ -1364,6 +1764,32 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         meta = store.get_meta(me["id"])
         return {"ok": True, "item": public_item(new, me, meta)}
 
+    def _share_pw_from(request: Request) -> str:
+        return (request.headers.get("x-share-password") or request.query_params.get("p") or "").strip()
+
+    def _check_share(token: str, request: Request, *, require_unlock: bool = True, consume: bool = False) -> tuple[dict, bool]:
+        item = store.find_by_share(token)
+        if not item:
+            raise HTTPException(404, "分享不存在或已过期")
+        mv = item.get("share_max_views")
+        if mv and int(item.get("share_views") or 0) >= int(mv):
+            store.consume_share_view(item["uuid"])
+            raise HTTPException(404, "分享已达到访问次数上限（已焚毁）")
+        pwh = item.get("share_password_hash")
+        locked = False
+        if pwh:
+            given = _share_pw_from(request)
+            if not given or not verify_password(given, pwh):
+                locked = True
+                if require_unlock:
+                    raise HTTPException(403, "需要正确的提取码")
+        if not locked and consume and mv:
+            updated = store.consume_share_view(item["uuid"])
+            if updated is None:
+                raise HTTPException(404, "分享已达到访问次数上限（已焚毁）")
+            item = updated
+        return item, locked
+
     @app.post("/api/items/{uid}/share")
     async def create_share(request: Request, uid: str):
         me = require_user(request)
@@ -1374,19 +1800,41 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             body = await request.json()
         except Exception:
             body = {}
+        if not isinstance(body, dict):
+            body = {}
         hours = body.get("hours", 24 * 7)
         try:
             hours = float(hours)
         except (TypeError, ValueError):
             hours = 24 * 7
-        if hours <= 0:
-            share_exp = None
-        else:
-            share_exp = time.time() + hours * 3600
+        share_exp = None if hours <= 0 else (time.time() + hours * 3600)
+        pw_raw = body.get("password")
+        pw_hash = None
+        if isinstance(pw_raw, str) and pw_raw.strip():
+            pw = pw_raw.strip()
+            if len(pw) > 64:
+                raise HTTPException(400, "提取码最多 64 位")
+            pw_hash = hash_password(pw)
+        mv_raw = body.get("max_views")
+        max_views = None
+        if mv_raw not in (None, "", 0, "0"):
+            try:
+                mv_int = int(mv_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "max_views 须为正整数")
+            if mv_int < 1 or mv_int > 10000:
+                raise HTTPException(400, "max_views 须在 1~10000 之间")
+            max_views = mv_int
         token = secrets.token_urlsafe(18)
-        store.update_item(uid, share_token=token, share_expires_at=share_exp)
+        store.update_item(
+            uid, share_token=token, share_expires_at=share_exp,
+            share_password_hash=pw_hash, share_max_views=max_views, share_views=0,
+        )
         await emit("update", store.get_item(uid))
-        return {"ok": True, "token": token, "url": f"/s/{token}", "share_expires_at": share_exp}
+        return {
+            "ok": True, "token": token, "url": f"/s/{token}", "share_expires_at": share_exp,
+            "has_password": bool(pw_hash), "max_views": max_views,
+        }
 
     @app.delete("/api/items/{uid}/share")
     async def revoke_share(request: Request, uid: str):
@@ -1394,20 +1842,40 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         item = store.get_item(uid)
         if not item or item.get("owner_id") != me["id"]:
             raise HTTPException(404, "条目不存在")
-        store.update_item(uid, share_token=None, share_expires_at=None)
+        store.update_item(uid, share_token=None, share_expires_at=None,
+                          share_password_hash=None, share_max_views=None, share_views=0)
         await emit("update", store.get_item(uid))
         return {"ok": True}
 
     @app.get("/api/share/{token}")
-    def api_share(token: str):
-        item = store.find_by_share(token)
-        if not item:
-            raise HTTPException(404, "分享不存在或已过期")
+    def api_share(request: Request, token: str):
+        # 文本分享查看即计次；文件分享元数据不扣次，实际下载/预览时扣次
+        item, locked = _check_share(token, request, require_unlock=False, consume=False)
+        if locked:
+            return {
+                "ok": True, "locked": True, "has_password": True,
+                "type": item["type"], "owner_username": item.get("owner_username"),
+                "share_expires_at": item.get("share_expires_at"),
+                "max_views": item.get("share_max_views"),
+            }
+        if item["type"] == "text" and item.get("share_max_views"):
+            updated = store.consume_share_view(item["uuid"])
+            if updated is None:
+                raise HTTPException(404, "分享已达到访问次数上限（已焚毁）")
+            item = updated
+        mv = item.get("share_max_views")
+        views = int(item.get("share_views") or 0)
         out = {
             "uuid": item["uuid"], "type": item["type"], "created": item.get("created"),
             "size": item.get("size"), "owner_username": item.get("owner_username"),
             "visibility": item.get("visibility"), "expires_at": item.get("expires_at"),
             "share_expires_at": item.get("share_expires_at"),
+            "has_password": bool(item.get("share_password_hash")),
+            "locked": False,
+            "max_views": mv,
+            "views_left": max(0, int(mv) - views) if mv else None,
+            "note": item.get("note") or "",
+            "encrypted": bool(item.get("encrypted")),
             "mime": item.get("mime") or guess_mime(item.get("filename", "")),
         }
         if item["type"] == "text":
@@ -1441,16 +1909,46 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         return _archive_response(item)
 
     @app.get("/s/{token}/archive")
-    def share_archive(token: str):
-        item = store.find_by_share(token)
-        if not item or item.get("type") != "file":
+    def share_archive(request: Request, token: str):
+        item, _ = _check_share(token, request, require_unlock=True, consume=False)
+        if item.get("type") != "file":
             raise HTTPException(404, "分享不存在或已过期")
         return _archive_response(item)
 
-    @app.get("/s/{token}/file")
-    def share_file(token: str, inline: int = 0):
-        item = store.find_by_share(token)
+    # ---- Office 文档结构化预览（docx / xlsx / xlsm / xls / csv / pptx）----
+    def _office_response(item: dict) -> dict:
+        path = store.file_path(item["filename"])
+        if not path or not path.is_file():
+            raise HTTPException(404, "文件不存在")
+        try:
+            return parse_office(path, item["filename"])
+        except OfficeError as e:
+            raise HTTPException(e.status, e.message)
+
+    @app.get("/api/items/{uid}/office")
+    def item_office(request: Request, uid: str):
+        me = current_user(request)
+        item = store.get_item(uid)
         if not item or item.get("type") != "file":
+            raise HTTPException(404, "条目不存在")
+        if not visible_to(item, me):
+            raise HTTPException(403, "无权查看此文件")
+        return _office_response(item)
+
+    @app.get("/s/{token}/office")
+    def share_office(request: Request, token: str):
+        item, _ = _check_share(token, request, require_unlock=True, consume=False)
+        if item.get("type") != "file":
+            raise HTTPException(404, "分享不存在或已过期")
+        return _office_response(item)
+
+    @app.get("/s/{token}/file")
+    def share_file(request: Request, token: str, inline: int = 0):
+        rng = request.headers.get("range") or ""
+        # 仅在首次/整文件请求计次，避免视频拖拽 Range 重复扣次
+        should_consume = (not rng) or rng.lower().startswith("bytes=0-")
+        item, _ = _check_share(token, request, require_unlock=True, consume=should_consume)
+        if item.get("type") != "file":
             raise HTTPException(404, "分享不存在或已过期")
         path = store.file_path(item["filename"])
         if not path or not path.is_file():
@@ -1644,16 +2142,26 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
     def _clip_public(c: Optional[dict]) -> dict:
         if not c:
             return {"ok": True, "clip": None}
-        return {"ok": True, "clip": {k: c.get(k) for k in ("text", "hash", "ts", "origin", "origin_name")}}
+        out = {k: c.get(k) for k in ("text", "hash", "ts", "origin", "origin_name", "size")}
+        out["kind"] = c.get("kind") or "text"
+        return {"ok": True, "clip": out}
 
     @app.get("/api/clipsync")
     def get_clipsync(request: Request):
         me = require_user(request)
         return _clip_public(store.get_clip(me["id"]))
 
+    @app.get("/api/clipsync/image")
+    def get_clipsync_image(request: Request):
+        me = require_user(request)
+        p = store.clipsync_img_path(me["id"])
+        if not p.is_file():
+            raise HTTPException(404, "当前没有同步的图片")
+        return FileResponse(p, media_type="image/png", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
     @app.post("/api/clipsync")
     async def post_clipsync(request: Request):
-        """某台设备的本机复制。按方向放行 → 去重 → LWW 覆盖 → 只推给本人的其他设备（WebSocket type=clip）。"""
+        """某台设备的本机复制（文本或图片）。按方向放行 → 去重 → LWW 覆盖 → 只推给本人的其他设备（WebSocket type=clip）。"""
         me = require_user(request)
         dev = _dev_id(request)
         if not dev:
@@ -1662,11 +2170,8 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             body = await request.json()
         except Exception:
             raise HTTPException(400, "请求格式错误")
-        text = body.get("text") if isinstance(body, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            raise HTTPException(400, "内容不能为空")
-        if len(text.encode("utf-8")) > CLIP_MAX:
-            raise HTTPException(413, "剪贴板文本超过 512 KB，未同步")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求格式错误")
         devs = store.get_devices(me["id"])
         info = devs.get(dev)
         if info and info.get("direction") in ("recv", "off"):
@@ -1674,16 +2179,65 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
         if info:  # 顺便刷新 last_seen
             info = dict(info, last_seen=time.time())
             store.put_device(me["id"], dev, info)
+        kind = str(body.get("kind") or "text").lower()
+        now = time.time()
+
+        if kind == "image":
+            b64 = body.get("image_b64")
+            if not isinstance(b64, str) or not b64:
+                raise HTTPException(400, "缺少 image_b64")
+            if len(b64) > 6 * 1024 * 1024:
+                raise HTTPException(413, "同步图片超过 4 MB 限制")
+            try:
+                raw = base64.b64decode(b64, validate=True)
+            except Exception:
+                raise HTTPException(400, "image_b64 不是有效的 Base64")
+            if len(raw) > 4 * 1024 * 1024:
+                raise HTTPException(413, "同步图片超过 4 MB 限制")
+            try:
+                old_max = Image.MAX_IMAGE_PIXELS
+                Image.MAX_IMAGE_PIXELS = 40_000_000
+                try:
+                    with Image.open(BytesIO(raw)) as im:
+                        im.load()
+                        im.thumbnail((1920, 1920))
+                        buf = BytesIO()
+                        im.convert("RGBA" if im.mode in ("RGBA", "LA") else "RGB").save(buf, format="PNG", optimize=True)
+                        png_bytes = buf.getvalue()
+                finally:
+                    Image.MAX_IMAGE_PIXELS = old_max
+            except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+                raise HTTPException(422, "不是有效的图片数据")
+            h = hashlib.sha256(png_bytes).hexdigest()
+            cur = store.get_clip(me["id"])
+            if cur and cur.get("hash") == h and cur.get("kind") == "image":
+                return {"ok": True, "duplicate": True, **_clip_public(cur)}
+            dst = store.clipsync_img_path(me["id"])
+            tmp_img = dst.with_suffix(".tmp.png")
+            tmp_img.write_bytes(png_bytes)
+            os.replace(tmp_img, dst)
+            clip = {"kind": "image", "text": "", "hash": h, "size": len(png_bytes), "ts": now,
+                    "origin": dev, "origin_name": (info or {}).get("name") or "未命名设备"}
+            store.set_clip(me["id"], clip)
+            ev = {"type": "clip", "kind": "image", "text": "", "hash": h, "size": len(png_bytes),
+                  "ts": now, "origin": dev, "origin_name": clip["origin_name"]}
+            await hub.broadcast(ev, public=False, owner_id=me["id"])
+            return {"ok": True, "duplicate": False, "uuid": None, **_clip_public(clip)}
+
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(400, "内容不能为空")
+        if len(text.encode("utf-8")) > CLIP_MAX:
+            raise HTTPException(413, "剪贴板文本超过 512 KB，未同步")
         h = hashlib.sha256(text.encode("utf-8")).hexdigest()
         cur = store.get_clip(me["id"])
-        if cur and cur.get("hash") == h:
+        if cur and cur.get("hash") == h and (cur.get("kind") or "text") == "text":
             return {"ok": True, "duplicate": True, **_clip_public(cur)}  # 一次复制只传播一次
-        now = time.time()
         # LWW：以服务器收到的时间为准（避免设备时钟不一致）；客户端可带 base_ts 表示「基于哪一版」，仅作诊断返回
-        clip = {"text": text, "hash": h, "ts": now, "origin": dev,
+        clip = {"kind": "text", "text": text, "hash": h, "ts": now, "origin": dev,
                 "origin_name": (info or {}).get("name") or "未命名设备"}
         store.set_clip(me["id"], clip)
-        ev = {"type": "clip", **{k: clip[k] for k in ("text", "hash", "ts", "origin", "origin_name")}}
+        ev = {"type": "clip", "kind": "text", **{k: clip[k] for k in ("text", "hash", "ts", "origin", "origin_name")}}
         await hub.broadcast(ev, public=False, owner_id=me["id"])
         uid = None
         # 显式 true 才记入私有；缺省 / false = 不记（避免与「Mac 监听剪贴板」混淆：本机复制不应自动进列表）
@@ -1695,6 +2249,203 @@ def create_app(data_dir: Optional[str] = None, allow_register: Optional[bool] = 
             store.add_item(item)
             await emit("create", item)
         return {"ok": True, "duplicate": False, "uuid": uid, **_clip_public(clip)}
+
+    # ---- 扫码快速配对登录（Web → 手机 / 桌面客户端，一次性 120s 有效）----
+    pair_lock = threading.Lock()
+    pair_codes: dict[str, dict] = {}
+    PAIR_TTL = 120
+
+    def _purge_pairs() -> None:
+        now = time.time()
+        dead = [k for k, v in pair_codes.items() if v["exp"] <= now]
+        for k in dead:
+            pair_codes.pop(k, None)
+
+    @app.post("/api/pair/create")
+    def pair_create(request: Request):
+        me = require_user(request)
+        code = secrets.token_urlsafe(24)
+        base = str(request.base_url).rstrip("/")
+        uri = f"clipboard://pair?server={quote(base, safe='')}&code={code}"
+        with pair_lock:
+            _purge_pairs()
+            # 限制单用户同时最多 5 个未用配对码
+            mine = [k for k, v in pair_codes.items() if v["user_id"] == me["id"]]
+            for old in mine[:-4]:
+                pair_codes.pop(old, None)
+            pair_codes[code] = {"user_id": me["id"], "exp": time.time() + PAIR_TTL, "uri": uri}
+        return {"ok": True, "code": code, "expires_in": PAIR_TTL, "uri": uri, "qr_url": f"/api/pair/{code}/qr"}
+
+    @app.get("/api/pair/{code}/qr")
+    def pair_qr(request: Request, code: str):
+        me = require_user(request)
+        with pair_lock:
+            _purge_pairs()
+            rec = pair_codes.get(code)
+        if not rec or rec["user_id"] != me["id"]:
+            raise HTTPException(404, "配对码不存在或已过期")
+        img = qrcode.make(rec["uri"], border=2, box_size=8)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/pair/claim")
+    async def pair_claim(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求格式错误")
+        code = str(body.get("code") or "").strip() if isinstance(body, dict) else ""
+        if not code:
+            raise HTTPException(400, "缺少配对码")
+        with pair_lock:
+            _purge_pairs()
+            rec = pair_codes.pop(code, None)
+        if not rec:
+            raise HTTPException(404, "配对码无效、已过期或已使用")
+        user = store.find_user(uid=rec["user_id"])
+        if not user:
+            raise HTTPException(404, "账号不存在")
+        tok = make_token(user["id"])
+        resp = JSONResponse({"ok": True, "token": tok, "user": {"id": user["id"], "username": user["username"]}})
+        resp.set_cookie(COOKIE, tok, httponly=True, samesite="lax", max_age=TTL, path="/")
+        return resp
+
+    # ---- 空间用量统计 & 个人数据一键备份 ZIP ----
+    @app.get("/api/account/stats")
+    def account_stats(request: Request):
+        me = require_user(request)
+        active = [i for i in store.list_items() if i.get("owner_id") == me["id"]]
+        trash = store.list_trash(me["id"])
+        vault = store.get_vault(me["id"])
+        return {
+            "ok": True,
+            "total_items": len(active),
+            "text_items": sum(1 for i in active if i["type"] == "text"),
+            "file_items": sum(1 for i in active if i["type"] == "file"),
+            "total_bytes": sum(int(i.get("size") or 0) for i in active),
+            "trash_items": len(trash),
+            "trash_bytes": sum(int(i.get("size") or 0) for i in trash),
+            "vault_exists": vault is not None,
+            "vault_items": int(vault.get("item_count") or 0) if vault else 0,
+        }
+
+    @app.get("/api/account/export")
+    def account_export(request: Request):
+        me = require_user(request)
+        active = [i for i in store.list_items() if i.get("owner_id") == me["id"]]
+        meta = store.get_meta(me["id"])
+        vault = store.get_vault(me["id"])
+        fd, tmp = tempfile.mkstemp(prefix="clip-backup-", suffix=".zip")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+                export_meta = {
+                    "exported_at": datetime.now(timezone.utc).isoformat(),
+                    "username": me["username"],
+                    "version": VERSION,
+                    "items": [public_item(i, me, meta) for i in active],
+                }
+                zf.writestr("items.json", json.dumps(export_meta, ensure_ascii=False, indent=2).encode("utf-8"))
+                if vault is not None:
+                    zf.writestr("vault_encrypted.json", json.dumps(vault, ensure_ascii=False, indent=2).encode("utf-8"))
+                seen: set[str] = set()
+                for i in active:
+                    if i.get("type") == "file" and i.get("filename"):
+                        fn = i["filename"]
+                        fp = store.file_path(fn)
+                        if fp and fp.is_file() and fn not in seen:
+                            seen.add(fn)
+                            zf.write(fp, arcname=f"files/{fn}")
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise HTTPException(500, "导出备份失败")
+        dl_name = f"clipboard-backup-{me['username']}-{datetime.now().strftime('%Y%m%d')}.zip"
+        return FileResponse(
+            tmp, filename=dl_name, media_type="application/zip", content_disposition_type="attachment",
+            background=BackgroundTask(lambda p=tmp: os.path.exists(p) and os.unlink(p)),
+        )
+
+    # ---- E2EE 密码保险箱（客户端 PBKDF2-SHA256 + AES-256-GCM 零知识存储）----
+    def _decode_b64_strict(val: Any, name: str, min_len: int, max_len: int) -> str:
+        if not isinstance(val, str) or not val:
+            raise HTTPException(400, f"缺少 {name}")
+        if len(val) > max_len * 2:
+            raise HTTPException(413, f"{name} 超过大小限制")
+        try:
+            raw = base64.b64decode(val, validate=True)
+        except Exception:
+            raise HTTPException(400, f"{name} 不是有效的 Base64")
+        if not (min_len <= len(raw) <= max_len):
+            raise HTTPException(400, f"{name} 长度不合法")
+        return val
+
+    @app.get("/api/vault")
+    def get_vault(request: Request):
+        me = require_user(request)
+        v = store.get_vault(me["id"])
+        return {"ok": True, "exists": v is not None, "vault": v}
+
+    @app.put("/api/vault")
+    async def put_vault(request: Request):
+        me = require_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "请求体不是有效 JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "请求体必须是对象")
+        if body.get("version") != 1:
+            raise HTTPException(400, "不支持的密码库格式版本")
+        if body.get("kdf") != "PBKDF2-SHA256":
+            raise HTTPException(400, "不支持的密钥派生算法")
+        iters = body.get("iterations")
+        if not isinstance(iters, int) or isinstance(iters, bool) or not (100_000 <= iters <= 1_000_000):
+            raise HTTPException(400, "迭代次数须在 100,000 到 1,000,000 之间")
+        salt = _decode_b64_strict(body.get("salt"), "salt", 16, 64)
+        iv = _decode_b64_strict(body.get("iv"), "iv", 12, 12)
+        ct = _decode_b64_strict(body.get("ct"), "ct", 16, 10 * 1024 * 1024)
+        ic = body.get("item_count")
+        item_count = ic if isinstance(ic, int) and not isinstance(ic, bool) and ic >= 0 else 0
+        exp_rev = body.get("expected_rev")
+        if exp_rev is not None and (not isinstance(exp_rev, int) or isinstance(exp_rev, bool) or exp_rev < 0):
+            raise HTTPException(400, "expected_rev 无效")
+        envelope = {
+            "version": 1,
+            "kdf": "PBKDF2-SHA256",
+            "iterations": iters,
+            "salt": salt,
+            "iv": iv,
+            "ct": ct,
+            "item_count": item_count,
+        }
+        saved, conflict = store.save_vault(me["id"], envelope, exp_rev)
+        if conflict:
+            return JSONResponse(
+                {"ok": False, "error": "密码库已在其他设备更新，请先同步后再保存", "vault": saved},
+                status_code=409,
+            )
+        await hub.broadcast({"type": "vault_update", "rev": saved["rev"]}, public=False, owner_id=me["id"])
+        return {"ok": True, "vault": saved}
+
+    @app.delete("/api/vault")
+    async def delete_vault(request: Request):
+        me = require_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        pw = body.get("password") if isinstance(body, dict) else ""
+        full_user = store.find_user(uid=me["id"])
+        if not isinstance(pw, str) or not verify_password(pw, (full_user or {}).get("password_hash") or ""):
+            raise HTTPException(403, "账号登录密码错误，无法重置密码库")
+        deleted = store.delete_vault(me["id"])
+        if deleted:
+            await hub.broadcast({"type": "vault_update", "rev": 0}, public=False, owner_id=me["id"])
+        return {"ok": True, "deleted": deleted}
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):

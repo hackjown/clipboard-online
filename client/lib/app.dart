@@ -65,6 +65,11 @@ class _ClipboardAppState extends State<ClipboardApp> {
   void _onUri(Uri uri, {bool cold = false}) {
     final dl = parseDeepLink(uri);
     if (dl == null) return;
+    if (dl is PairLink) {
+      _claimPairLink(dl);
+      if (MenuBarController.supported) MenuBarController.instance.openMain();
+      return;
+    }
     if (dl is ShareLink) {
       if (_ready && !cold) {
         _openShare(dl.token);
@@ -80,6 +85,19 @@ class _ClipboardAppState extends State<ClipboardApp> {
     // item / home：交给 HomeScreen（冷启动或未登录时先挂起，进入首页后处理）
     DeepLinkBus.instance.post(dl);
     if (MenuBarController.supported) MenuBarController.instance.openMain();
+  }
+
+  Future<void> _claimPairLink(PairLink link) async {
+    try {
+      await _api.setBase(link.server);
+      final user = await _api.claimPair(link.code);
+      if (mounted) {
+        setState(() {
+          _user = user;
+          _ready = true;
+        });
+      }
+    } catch (_) {}
   }
 
   void _openShare(String token) {

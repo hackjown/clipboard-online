@@ -23,6 +23,7 @@
     <a href="/" class="navbtn" data-act="home" id="navHome">主页</a>
     <button type="button" class="navbtn" data-act="add-text">添加文本</button>
     <button type="button" class="navbtn" data-act="add-file">上传文件</button>
+    <button type="button" class="navbtn" data-act="vault">密码库</button>
     <button type="button" class="navbtn navbtn--danger" data-act="clear-menu">清空<span class="caret"></span></button>
   </nav>
   <div class="top-right">
@@ -50,10 +51,12 @@
     <div class="side-actions">
       <button type="button" class="btn btn--accent" data-act="add-text"><span class="ico" data-i="plus"></span>添加文本</button>
       <button type="button" class="btn" data-act="add-file"><span class="ico" data-i="upload"></span>上传文件</button>
+      <button type="button" class="btn" data-act="vault"><span class="ico" data-i="key"></span>密码库（E2EE）</button>
     </div>
     <ul class="keys" aria-label="快捷键">
       <li><kbd>N</kbd>添加文本</li>
       <li><kbd>U</kbd>上传文件</li>
+      <li><kbd>V</kbd>密码库</li>
       <li><kbd>/</kbd>搜索</li>
       <li><kbd>Ctrl</kbd><kbd>V</kbd>粘贴即添加</li>
       <li><kbd>T</kbd>切换主题</li>
@@ -112,6 +115,7 @@
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
 <script src="/static/preview.js"></script>
+<script src="/static/vault.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

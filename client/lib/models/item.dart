@@ -1,4 +1,4 @@
-enum MediaKind { image, video, audio, text, pdf, archive, other }
+enum MediaKind { image, video, audio, text, pdf, archive, office, other }
 
 class ClipItem {
   ClipItem({
@@ -22,6 +22,9 @@ class ClipItem {
     this.looksMd = false,
     this.isUrl = false,
     this.mime,
+    this.note = '',
+    this.encrypted = false,
+    this.thumbUrl,
   });
 
   final String uuid;
@@ -44,6 +47,9 @@ class ClipItem {
   final bool looksMd;
   final bool isUrl;
   final String? mime;
+  final String note;
+  final bool encrypted;
+  final String? thumbUrl;
 
   /// 按 mime / 扩展名判断媒体类型（用于预览）
   MediaKind get mediaKind {
@@ -64,12 +70,20 @@ class ClipItem {
       return MediaKind.audio;
     }
     if (m == 'application/pdf' || e == 'pdf') return MediaKind.pdf;
+    if (isOfficeName(filename ?? '')) return MediaKind.office;
     if (m.startsWith('text/') ||
-        const {'txt', 'md', 'json', 'log', 'csv', 'xml', 'yaml', 'yml', 'ini', 'py', 'js', 'dart', 'sh'}.contains(e)) {
+        const {'txt', 'md', 'json', 'log', 'xml', 'yaml', 'yml', 'ini', 'py', 'js', 'dart', 'sh'}.contains(e)) {
       return MediaKind.text;
     }
     if (isArchiveName(filename ?? '')) return MediaKind.archive;
     return MediaKind.other;
+  }
+
+  /// 与服务端 office.py 一致：按文件名判断 Office / CSV 文档
+  static bool isOfficeName(String name) {
+    final n = name.toLowerCase();
+    final e = n.contains('.') ? n.split('.').last : '';
+    return const {'docx', 'xlsx', 'xlsm', 'xls', 'csv', 'tsv', 'pptx', 'doc', 'ppt'}.contains(e);
   }
 
   /// 与服务端 archive.py 一致：按文件名判断压缩包（只预览目录，不解压）
@@ -106,6 +120,9 @@ class ClipItem {
         looksMd: j['looks_md'] == true,
         isUrl: j['is_url'] == true,
         mime: j['mime'] as String?,
+        note: (j['note'] as String?) ?? '',
+        encrypted: j['encrypted'] == true,
+        thumbUrl: j['thumb_url'] as String?,
       );
 }
 

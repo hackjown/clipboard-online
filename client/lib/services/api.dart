@@ -11,6 +11,7 @@ import '../models/sync.dart';
 import '../models/user.dart';
 import 'auth_store.dart';
 import 'share_config.dart';
+import 'vault_crypto.dart';
 
 class ApiException implements Exception {
   ApiException(this.message, {this.status, this.method, this.url});
@@ -107,10 +108,107 @@ class ClipApi {
     await _json(r);
   }
 
+  /// 编辑文件重命名与备注（仅所有者）
+  Future<void> editFile(String uuid, {String? filename, String? note}) async {
+    final body = <String, dynamic>{
+      if (filename != null) 'filename': filename,
+      if (note != null) 'note': note,
+    };
+    final r = await http.patch(_u('/api/items/$uuid'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode(body)));
+    await _json(r);
+  }
+
+  /// 回收站：恢复 / 列表 / 清空
+  Future<void> restoreTrash(String uuid) async {
+    final r = await http.post(_u('/api/trash/$uuid/restore'), headers: _authHeaders);
+    await _json(r);
+  }
+
+  Future<List<ClipItem>> listTrash() async {
+    final r = await http.get(_u('/api/trash'), headers: _authHeaders);
+    final j = await _json(r);
+    return ((j['items'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => ClipItem.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<int> emptyTrash() async {
+    final r = await http.post(_u('/api/trash/empty'), headers: _authHeaders);
+    final j = await _json(r);
+    return (j['removed'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 扫码配对码一键登录
+  Future<ClipUser> claimPair(String code) async {
+    final r = await http.post(
+      _u('/api/pair/claim'),
+      headers: {'Content-Type': 'application/json; charset=utf-8'},
+      body: utf8.encode(jsonEncode({'code': code.trim()})),
+    );
+    final j = await _json(r);
+    token = j['token'] as String?;
+    final user = ClipUser.fromJson(Map<String, dynamic>.from(j['user'] as Map));
+    if (token != null) await store.saveSession(token: token!, username: user.username);
+    ShareConfig.sync(base, token);
+    return user;
+  }
+
+  /// 空间统计
+  Future<Map<String, dynamic>> accountStats() async {
+    final r = await http.get(_u('/api/account/stats'), headers: _authHeaders);
+    return _json(r);
+  }
+
+  String thumbUrl(String uuid) {
+    final b = base.replaceAll(RegExp(r'/+$'), '');
+    return '$b/api/items/$uuid/thumb';
+  }
+
+  String accountExportUrl() {
+    final b = base.replaceAll(RegExp(r'/+$'), '');
+    return '$b/api/account/export';
+  }
+
   // ---- 压缩包目录预览（只列目录，不解压）----
   Future<ArchiveListing> archiveListing(String uuid) async {
     final r = await http.get(_u('/api/items/$uuid/archive'), headers: _authHeaders);
     return ArchiveListing.fromJson(await _json(r));
+  }
+
+  // ---- Office 文档结构化预览（docx / xlsx / xlsm / xls / pptx）----
+  Future<OfficePreview> officePreview(String uuid) async {
+    final r = await http.get(_u('/api/items/$uuid/office'), headers: _authHeaders);
+    return OfficePreview.fromJson(await _json(r));
+  }
+
+  // ---- E2EE 密码保险箱（服务端仅存取密文信封）----
+  Future<VaultEnvelope?> getVault() async {
+    final r = await http.get(_u('/api/vault'), headers: _authHeaders);
+    final j = await _json(r);
+    if (j['exists'] != true || j['vault'] is! Map) return null;
+    return VaultEnvelope.fromJson(Map<String, dynamic>.from(j['vault'] as Map));
+  }
+
+  Future<VaultEnvelope> putVault(VaultEnvelope envelope, {required int expectedRev}) async {
+    final r = await http.put(
+      _u('/api/vault'),
+      headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+      body: utf8.encode(jsonEncode(envelope.toPutJson(expectedRev: expectedRev))),
+    );
+    final j = await _json(r);
+    return VaultEnvelope.fromJson(Map<String, dynamic>.from(j['vault'] as Map));
+  }
+
+  Future<void> deleteVault(String accountPassword) async {
+    final req = http.Request('DELETE', _u('/api/vault'))
+      ..headers.addAll({..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'})
+      ..bodyBytes = utf8.encode(jsonEncode({'password': accountPassword}));
+    final streamed = await req.send();
+    final r = await http.Response.fromStream(streamed);
+    await _json(r);
   }
 
   // ---- 多设备剪贴板同步（设备列表 / 当前同步内容）----
@@ -151,6 +249,21 @@ class ClipApi {
         body: utf8.encode(jsonEncode({'text': text, 'save_history': saveHistory})));
     final j = await _json(r);
     return j['duplicate'] != true;
+  }
+
+  /// 同步剪贴板图片（PNG/JPEG，<= 4MB）
+  Future<bool> postClipImage(Uint8List bytes) async {
+    final r = await http.post(_u('/api/clipsync'),
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode({'kind': 'image', 'image_b64': base64Encode(bytes)})));
+    final j = await _json(r);
+    return j['duplicate'] != true;
+  }
+
+  Future<Uint8List?> getClipImage() async {
+    final r = await http.get(_u('/api/clipsync/image'), headers: _authHeaders);
+    if (r.statusCode != 200) return null;
+    return r.bodyBytes;
   }
 
   /// 把「其他设备同步过来」的文本记入我的私有（source=clipsync，服务器按内容去重、不发 Bark）
@@ -359,10 +472,20 @@ class ClipApi {
     await _json(r);
   }
 
-  Future<Map<String, dynamic>> createShare(String uuid, {num hours = 168}) async {
+  Future<Map<String, dynamic>> createShare(
+    String uuid, {
+    num hours = 168,
+    String? password,
+    int? maxViews,
+  }) async {
+    final body = <String, dynamic>{
+      'hours': hours,
+      if (password != null && password.trim().isNotEmpty) 'password': password.trim(),
+      if (maxViews != null && maxViews > 0) 'max_views': maxViews,
+    };
     final r = await http.post(_u('/api/items/$uuid/share'),
-        headers: {..._authHeaders, 'Content-Type': 'application/json'},
-        body: jsonEncode({'hours': hours}));
+        headers: {..._authHeaders, 'Content-Type': 'application/json; charset=utf-8'},
+        body: utf8.encode(jsonEncode(body)));
     return _json(r);
   }
 
@@ -458,5 +581,165 @@ class ArchiveListing {
         totalSize: (j['total_size'] as num?)?.toInt() ?? 0,
         truncated: j['truncated'] == true,
         encrypted: j['encrypted'] == true,
+      );
+}
+
+class OfficeRun {
+  OfficeRun({required this.text, this.bold = false, this.italic = false, this.underline = false, this.strike = false});
+  final String text;
+  final bool bold;
+  final bool italic;
+  final bool underline;
+  final bool strike;
+
+  factory OfficeRun.fromJson(Map<String, dynamic> j) => OfficeRun(
+        text: (j['t'] ?? '').toString(),
+        bold: j['b'] == true,
+        italic: j['i'] == true,
+        underline: j['u'] == true,
+        strike: j['s'] == true,
+      );
+}
+
+class OfficeTableCell {
+  OfficeTableCell({required this.text, this.colspan = 1});
+  final String text;
+  final int colspan;
+
+  factory OfficeTableCell.fromJson(Map<String, dynamic> j) => OfficeTableCell(
+        text: (j['text'] ?? '').toString(),
+        colspan: (j['colspan'] as num?)?.toInt() ?? 1,
+      );
+}
+
+class OfficeBlock {
+  OfficeBlock({
+    required this.kind,
+    this.level = 0,
+    this.text = '',
+    this.isList = false,
+    this.indent = 0,
+    this.runs = const [],
+    this.rows = const [],
+    this.truncated = false,
+    this.src,
+    this.alt,
+  });
+  final String kind; // heading | paragraph | table | image
+  final int level;
+  final String text;
+  final bool isList;
+  final int indent;
+  final List<OfficeRun> runs;
+  final List<List<OfficeTableCell>> rows;
+  final bool truncated;
+  final String? src;
+  final String? alt;
+
+  factory OfficeBlock.fromJson(Map<String, dynamic> j) => OfficeBlock(
+        kind: (j['kind'] ?? 'paragraph').toString(),
+        level: (j['level'] as num?)?.toInt() ?? 0,
+        text: (j['text'] ?? '').toString(),
+        isList: j['list'] == true,
+        indent: (j['indent'] as num?)?.toInt() ?? 0,
+        runs: ((j['runs'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((r) => OfficeRun.fromJson(Map<String, dynamic>.from(r)))
+            .toList(),
+        rows: ((j['rows'] as List?) ?? const [])
+            .whereType<List>()
+            .map((row) => row
+                .whereType<Map>()
+                .map((c) => OfficeTableCell.fromJson(Map<String, dynamic>.from(c)))
+                .toList())
+            .toList(),
+        truncated: j['truncated'] == true,
+        src: j['src']?.toString(),
+        alt: j['alt']?.toString(),
+      );
+}
+
+class OfficeSheet {
+  OfficeSheet({
+    required this.name,
+    required this.rows,
+    required this.totalRows,
+    required this.totalCols,
+    this.truncatedRows = false,
+    this.truncatedCols = false,
+  });
+  final String name;
+  final List<List<String>> rows;
+  final int totalRows;
+  final int totalCols;
+  final bool truncatedRows;
+  final bool truncatedCols;
+
+  factory OfficeSheet.fromJson(Map<String, dynamic> j) => OfficeSheet(
+        name: (j['name'] ?? '').toString(),
+        rows: ((j['rows'] as List?) ?? const [])
+            .whereType<List>()
+            .map((r) => r.map((c) => c == null ? '' : c.toString()).toList())
+            .toList(),
+        totalRows: (j['total_rows'] as num?)?.toInt() ?? 0,
+        totalCols: (j['total_cols'] as num?)?.toInt() ?? 0,
+        truncatedRows: j['truncated_rows'] == true,
+        truncatedCols: j['truncated_cols'] == true,
+      );
+}
+
+class OfficeSlide {
+  OfficeSlide({required this.index, required this.title, required this.blocks, this.notes = ''});
+  final int index;
+  final String title;
+  final List<OfficeBlock> blocks;
+  final String notes;
+
+  factory OfficeSlide.fromJson(Map<String, dynamic> j) => OfficeSlide(
+        index: (j['index'] as num?)?.toInt() ?? 1,
+        title: (j['title'] ?? '').toString(),
+        blocks: ((j['blocks'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((b) => OfficeBlock.fromJson(Map<String, dynamic>.from(b)))
+            .toList(),
+        notes: (j['notes'] ?? '').toString(),
+      );
+}
+
+class OfficePreview {
+  OfficePreview({
+    required this.type,
+    this.title = '',
+    this.truncated = false,
+    this.meta = const {},
+    this.blocks = const [],
+    this.sheets = const [],
+    this.slides = const [],
+  });
+  final String type; // docx | xlsx | xls | pptx
+  final String title;
+  final bool truncated;
+  final Map<String, dynamic> meta;
+  final List<OfficeBlock> blocks;
+  final List<OfficeSheet> sheets;
+  final List<OfficeSlide> slides;
+
+  factory OfficePreview.fromJson(Map<String, dynamic> j) => OfficePreview(
+        type: (j['type'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        truncated: j['truncated'] == true,
+        meta: j['meta'] is Map ? Map<String, dynamic>.from(j['meta'] as Map) : const {},
+        blocks: ((j['blocks'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((b) => OfficeBlock.fromJson(Map<String, dynamic>.from(b)))
+            .toList(),
+        sheets: ((j['sheets'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((s) => OfficeSheet.fromJson(Map<String, dynamic>.from(s)))
+            .toList(),
+        slides: ((j['slides'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((s) => OfficeSlide.fromJson(Map<String, dynamic>.from(s)))
+            .toList(),
       );
 }

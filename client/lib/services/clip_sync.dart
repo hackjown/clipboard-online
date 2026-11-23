@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:crypto/crypto.dart' as std_crypto;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/sync.dart';
@@ -276,15 +278,39 @@ class ClipSync {
     }
   }
 
+  String? _lastImgHash;
+
   Future<void> _tick() async {
     if (_busy) return;
     _busy = true;
     try {
       final t = await _readLocal();
-      if (t != null) await _maybeSend(t);
+      if (t != null && t.trim().isNotEmpty) {
+        await _maybeSend(t);
+        return;
+      }
+      await _maybeSendImage();
     } finally {
       _busy = false;
     }
+  }
+
+  Future<void> _maybeSendImage() async {
+    final api = _api;
+    final s = settings.value;
+    if (api == null || !s.enabled || !directionSends(s.direction)) return;
+    try {
+      final bytes = await Pasteboard.image;
+      if (bytes == null || bytes.isEmpty || bytes.length > 4 * 1024 * 1024) return;
+      final h = std_crypto.sha256.convert(bytes).toString();
+      if (h == _lastImgHash) return;
+      _lastImgHash = h;
+      await api.postClipImage(bytes);
+      lastError.value = null;
+      status.sentAt = DateTime.now();
+      status.sentPreview = '[图片 ${(bytes.length / 1024).round()} KB]';
+      _touch();
+    } catch (_) {}
   }
 
   Future<void> _maybeSend(String text) async {
@@ -307,6 +333,11 @@ class ClipSync {
     }
   }
 
+  /// 密码库复制机密字段时调用：标记为已忽略，绝不通过多设备同步发送到服务器
+  void suppressLocalCopy(String text) {
+    if (text.isNotEmpty) _guard.markRemote(text);
+  }
+
   /// WebSocket 事件（type == clip）
   Future<bool> onRemote(Map<String, dynamic> msg) async {
     final s = settings.value;
@@ -315,14 +346,34 @@ class ClipSync {
     if (api == null) return false;
     if ((msg['origin'] ?? '') == api.deviceId) return false; // 自己发的
     var clip = SyncClip.fromJson(msg);
-    if (clip.text.isEmpty) {
+    if (!clip.isImage && clip.text.isEmpty) {
       clip = await api.getClip() ?? clip; // 服务器省略正文时补拉
     }
     return _apply(clip);
   }
 
   Future<bool> _apply(SyncClip clip) async {
-    if (clip.text.isEmpty || clip.ts <= _lastAppliedTs) return false; // LWW：旧的不覆盖新的
+    if (clip.ts <= _lastAppliedTs) return false; // LWW：旧的不覆盖新的
+    if (clip.isImage) {
+      final api = _api;
+      if (api == null) return false;
+      _lastAppliedTs = clip.ts;
+      try {
+        final bytes = await api.getClipImage();
+        if (bytes == null || bytes.isEmpty) return false;
+        _lastImgHash = std_crypto.sha256.convert(bytes).toString();
+        await Pasteboard.writeImage(bytes);
+        lastApplied.value = clip;
+        status.receivedAt = DateTime.now();
+        status.receivedFrom = clip.originName;
+        _touch();
+        return true;
+      } catch (e) {
+        _err('写入同步图片失败：$e');
+        return false;
+      }
+    }
+    if (clip.text.isEmpty) return false;
     _lastAppliedTs = clip.ts;
     if (_guard.isCurrent(clip.text)) return false;
     _guard.markRemote(clip.text);

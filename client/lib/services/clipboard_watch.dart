@@ -66,6 +66,11 @@ class ClipboardWatch {
     }
   }
 
+  /// 密码库复制机密字段时调用：防止 Mac 剪贴板监听询问上传
+  void suppressText(String text) {
+    _lastText = text;
+  }
+
   /// 写入系统剪贴板
   Future<void> copyText(String text) => Clipboard.setData(ClipboardData(text: text));
 }

@@ -17,6 +17,9 @@ void main() {
   test('分享链接：clipboard://s/<token> 与 https://host/s/<token>', () {
     expect((parseDeepLink(Uri.parse('clipboard://s/AbC_123-xyz')) as ShareLink).token, 'AbC_123-xyz');
     expect((parseDeepLink(Uri.parse('https://clip.example.com/s/tok_ABC123')) as ShareLink).token, 'tok_ABC123');
+    final pair = parseDeepLink(Uri.parse('clipboard://pair?server=https%3A%2F%2Fclip.example.com&code=pairCode_1234')) as PairLink;
+    expect(pair.server, 'https://clip.example.com');
+    expect(pair.code, 'pairCode_1234');
   });
 
   test('非法 / 无关链接返回 null', () {

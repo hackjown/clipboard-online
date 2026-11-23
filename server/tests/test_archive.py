@@ -56,7 +56,7 @@ def make_tgz(entries, mode="w:gz"):
 def test_kind_is_archive():
     for n in ["a.zip", "a.JAR", "a.apk", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tar.xz", "a.7z", "a.rar"]:
         assert preview_kind(n) == "archive", n
-    assert preview_kind("a.docx") is None and preview_kind("a.gz") is None
+    assert preview_kind("a.docx") == "office" and preview_kind("a.gz") is None
 
 
 def test_zip_listing(client):

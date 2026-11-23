@@ -25,6 +25,12 @@ class HomeLink extends DeepLink {
   final String scope; // private | public
 }
 
+class PairLink extends DeepLink {
+  const PairLink({required this.server, required this.code});
+  final String server;
+  final String code;
+}
+
 final _idRe = RegExp(r'^[A-Za-z0-9_-]{4,128}$');
 
 DeepLink? parseDeepLink(Uri uri) {
@@ -37,6 +43,10 @@ DeepLink? parseDeepLink(Uri uri) {
         if (seg.isNotEmpty && _idRe.hasMatch(seg.first)) return ItemLink(seg.first);
       case 'home':
         return HomeLink(seg.isNotEmpty && seg.first == 'public' ? 'public' : 'private');
+      case 'pair':
+        final server = (uri.queryParameters['server'] ?? '').trim();
+        final code = (uri.queryParameters['code'] ?? '').trim();
+        if (server.isNotEmpty && _idRe.hasMatch(code)) return PairLink(server: server, code: code);
     }
     // clipboard:///s/<token> 之类（host 为空）
     final i = seg.indexOf('s');

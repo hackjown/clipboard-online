@@ -1,6 +1,6 @@
-/* 文件预览（图片缩放 + 上一张/下一张、视频、音频、PDF、文本/代码）。
- * 用法：ClipPreview.open([{name,kind,src,dl,size}], index)
- *   kind: image | video | audio | pdf | text ；src 为 inline 地址（?inline=1），dl 为下载地址
+/* 文件预览（图片缩放 + 上一张/下一张、视频、音频、PDF、文本/代码、压缩包目录、Office 结构化预览）。
+ * 用法：ClipPreview.open([{name,kind,src,dl,size,archive,office}], index)
+ *   kind: image | video | audio | pdf | text | archive | office ；src 为 inline 地址（?inline=1），dl 为下载地址
  * 所有文本一律用 textContent 渲染（不解析 HTML），Esc 关闭，←/→ 切换。 */
 (function () {
   'use strict';
@@ -95,11 +95,18 @@
         .then(function (o) {
           var t = o.t;
           if (!o.partial && /\.json$/i.test(it.name || '')) { try { t = JSON.stringify(JSON.parse(t), null, 2); } catch (_) {} }
-          pre.textContent = t + (o.partial ? '\n\n… 仅显示前 200KB，完整内容请下载' : '');
+          var full = t + (o.partial ? '\n\n… 仅显示前 200KB，完整内容请下载' : '');
+          if (isCodeFile(it.name) && full.length <= 100000) {
+            renderHighlighted(pre, full);
+          } else {
+            pre.textContent = full;
+          }
         })
         .catch(function (e) { if (e && e.name === 'AbortError') return; pre.textContent = '加载失败：' + (e && e.message || e); });
     } else if (it.kind === 'archive' && it.archive) {
       renderArchive(st, it);
+    } else if (it.kind === 'office' && it.office) {
+      renderOffice(st, it);
     } else {
       st.stage.append(msgDl('此类型不支持在线预览', it));
     }
@@ -164,6 +171,214 @@
         sum.textContent = bits.join(' · ');
         body.append(renderNode(buildTree(d.entries), 0));
         if (!d.entries.length) body.append(el('p', 'pv-hint2', '（空压缩包）'));
+      })
+      .catch(function (e) { if (e && e.name === 'AbortError') return; sum.textContent = '加载失败：' + (e && e.message || e); sum.className = 'pv-arch-sum err'; });
+  }
+
+  // ---- 轻量代码语法高亮（纯 DOM textContent，绝不使用 innerHTML）----
+  var CODE_RE = /\.(?:py|js|ts|jsx|tsx|json|css|sh|bash|c|h|cpp|java|go|rs|sql|yaml|yml|toml|rb|php|xml|dart|swift|kt)$/i;
+  var TOKEN_RE = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:function|return|const|let|var|if|else|for|while|switch|case|break|continue|class|extends|new|try|catch|finally|throw|async|await|import|export|from|def|lambda|with|as|pass|yield|None|True|False|true|false|null|undefined|int|float|str|bool|void|struct|enum|pub|fn|impl|match|SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|TABLE|JOIN|ORDER|GROUP|BY|LIMIT)\b|\b\d+(?:\.\d+)?\b)/g;
+  function isCodeFile(name) { return CODE_RE.test(name || ''); }
+  function renderHighlighted(pre, text) {
+    var frag = document.createDocumentFragment();
+    var last = 0, m;
+    TOKEN_RE.lastIndex = 0;
+    while ((m = TOKEN_RE.exec(text)) !== null) {
+      if (m.index > last) frag.append(document.createTextNode(text.slice(last, m.index)));
+      var tok = m[0], cls = 'hl-kw';
+      if (tok.startsWith('//') || tok.startsWith('/*') || tok.startsWith('#')) cls = 'hl-cmt';
+      else if (tok[0] === '"' || tok[0] === "'" || tok[0] === '`') cls = 'hl-str';
+      else if (/^\d/.test(tok)) cls = 'hl-num';
+      frag.append(el('span', cls, tok));
+      last = TOKEN_RE.lastIndex;
+    }
+    if (last < text.length) frag.append(document.createTextNode(text.slice(last)));
+    pre.replaceChildren(frag);
+  }
+
+  // ---- Office 文档结构化预览（docx / xlsx / xls / csv / pptx；全部用 textContent 渲染）----
+  function colName(idx) {
+    var s = '', n = idx;
+    while (n >= 0) {
+      s = String.fromCharCode(65 + (n % 26)) + s;
+      n = Math.floor(n / 26) - 1;
+    }
+    return s;
+  }
+  function renderRuns(parent, blk) {
+    if (!blk.runs || !blk.runs.length) {
+      parent.textContent = blk.text || '';
+      return;
+    }
+    blk.runs.forEach(function (r) {
+      var node = document.createTextNode(r.t || '');
+      if (r.s) { var s = document.createElement('s'); s.append(node); node = s; }
+      if (r.u) { var u = document.createElement('u'); u.append(node); node = u; }
+      if (r.i) { var em = document.createElement('em'); em.append(node); node = em; }
+      if (r.b) { var st = document.createElement('strong'); st.append(node); node = st; }
+      parent.append(node);
+    });
+  }
+  function renderOfficeTable(tb) {
+    var wrap = el('div', 'pv-tbl-wrap');
+    var table = document.createElement('table');
+    table.className = 'pv-tbl';
+    var tbody = document.createElement('tbody');
+    (tb.rows || []).forEach(function (row, ri) {
+      var tr = document.createElement('tr');
+      row.forEach(function (cell) {
+        var td = document.createElement(ri === 0 ? 'th' : 'td');
+        td.textContent = (cell && cell.text) || '';
+        if (cell && cell.colspan > 1) td.colSpan = cell.colspan;
+        tr.append(td);
+      });
+      tbody.append(tr);
+    });
+    table.append(tbody);
+    wrap.append(table);
+    if (tb.truncated) wrap.append(el('p', 'pv-hint2', '（表格行列过多，仅显示前部分内容）'));
+    return wrap;
+  }
+  function renderOfficeBlocks(parent, blocks) {
+    (blocks || []).forEach(function (b) {
+      if (b.kind === 'heading') {
+        var lvl = Math.max(1, Math.min(6, b.level || 2));
+        parent.append(el('h' + lvl, 'pv-h pv-h' + lvl, b.text || ''));
+      } else if (b.kind === 'paragraph') {
+        var p = el('p', b.list ? 'pv-p pv-li' : 'pv-p');
+        if (b.indent) p.style.marginLeft = (b.indent * 18) + 'px';
+        if (b.list) p.append(el('span', 'pv-bullet', '• '));
+        var span = document.createElement('span');
+        renderRuns(span, b);
+        p.append(span);
+        parent.append(p);
+      } else if (b.kind === 'table') {
+        parent.append(renderOfficeTable(b));
+      } else if (b.kind === 'image' && typeof b.src === 'string' && b.src.indexOf('data:image/') === 0) {
+        var img = el('img', 'pv-doc-img');
+        img.src = b.src;
+        img.alt = b.alt || '嵌入图片';
+        img.loading = 'lazy';
+        parent.append(img);
+      }
+    });
+  }
+  function renderOffice(st, it) {
+    var box = el('div', 'pv-office');
+    var sum = el('p', 'pv-arch-sum', '正在解析文档…');
+    var tabs = el('div', 'pv-tabs');
+    tabs.hidden = true;
+    var body = el('div', 'pv-off-body');
+    box.append(sum, tabs, body);
+    st.stage.append(box);
+    var ac = (window.AbortController ? new AbortController() : null);
+    st.abort = ac;
+    fetch(it.office, { credentials: 'same-origin', signal: ac ? ac.signal : undefined })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (o) {
+        if (!o.ok) {
+          sum.textContent = (o.d && (o.d.error || o.d.detail)) || '无法预览此 Office 文档';
+          sum.className = 'pv-arch-sum err';
+          body.append(msgDl('可下载后使用本机办公软件打开', it));
+          return;
+        }
+        var d = o.d;
+        var m = d.meta || {};
+        if (d.type === 'docx') {
+          var bits = ['Word 文档', (m.paragraphs || 0) + ' 段'];
+          if (m.tables) bits.push(m.tables + ' 个表格');
+          if (m.images) bits.push(m.images + ' 张图片');
+          if (m.omitted_images) bits.push('已省略 ' + m.omitted_images + ' 张大图/超额图');
+          if (d.truncated) bits.push('仅显示前部分内容');
+          sum.textContent = bits.join(' · ');
+          body.className = 'pv-off-body pv-doc';
+          if (d.title) body.append(el('div', 'pv-doc-title', d.title));
+          renderOfficeBlocks(body, d.blocks);
+          if (!(d.blocks && d.blocks.length)) body.append(el('p', 'pv-hint2', '（空白文档）'));
+        } else if (d.type === 'xlsx' || d.type === 'xls' || d.type === 'csv') {
+          var sheets = d.sheets || [];
+          var kindLbl = d.type === 'csv' ? 'CSV 表格' : 'Excel 表格';
+          body.className = 'pv-off-body pv-sheet';
+          if (!sheets.length) {
+            sum.textContent = kindLbl + ' · 0 个工作表';
+            body.append(el('p', 'pv-hint2', '（空工作簿）'));
+            return;
+          }
+          var showSheet = function (si) {
+            var sh = sheets[si];
+            Array.from(tabs.children).forEach(function (btn, idx) {
+              btn.setAttribute('aria-selected', idx === si ? 'true' : 'false');
+            });
+            var rows = sh.rows || [];
+            var cols = rows.length ? rows[0].length : 0;
+            var bits = [kindLbl, '共 ' + (m.total_sheets || sheets.length) + ' 个工作表', sh.name + '（' + (sh.total_rows || rows.length) + ' 行 × ' + (sh.total_cols || cols) + ' 列）'];
+            if (sh.truncated_rows || sh.truncated_cols) bits.push('仅显示前 ' + rows.length + ' 行 × ' + cols + ' 列');
+            else if (d.truncated) bits.push('部分工作表已截断');
+            sum.textContent = bits.join(' · ');
+            body.replaceChildren();
+            if (!rows.length) {
+              body.append(el('p', 'pv-hint2', '（空白工作表）'));
+              return;
+            }
+            var table = document.createElement('table');
+            table.className = 'pv-grid';
+            var thead = document.createElement('thead');
+            var htr = document.createElement('tr');
+            htr.append(el('th', 'pv-rn', ''));
+            for (var c = 0; c < cols; c++) htr.append(el('th', null, colName(c)));
+            thead.append(htr);
+            var tbody = document.createElement('tbody');
+            rows.forEach(function (r, ri) {
+              var tr = document.createElement('tr');
+              tr.append(el('th', 'pv-rn', String(ri + 1)));
+              for (var c = 0; c < cols; c++) tr.append(el('td', null, r[c] != null ? String(r[c]) : ''));
+              tbody.append(tr);
+            });
+            table.append(thead, tbody);
+            body.append(table);
+          };
+          tabs.hidden = false;
+          sheets.forEach(function (sh, idx) {
+            var b = el('button', 'pv-tab', sh.name || ('Sheet' + (idx + 1)));
+            b.type = 'button';
+            b.setAttribute('role', 'tab');
+            b.onclick = function () { showSheet(idx); };
+            tabs.append(b);
+          });
+          showSheet(0);
+        } else if (d.type === 'pptx') {
+          var slides = d.slides || [];
+          var pbits = ['PowerPoint 演示文稿', '共 ' + (m.total_slides || slides.length) + ' 页'];
+          if (m.images) pbits.push(m.images + ' 张图片');
+          if (m.omitted_images) pbits.push('已省略 ' + m.omitted_images + ' 张图');
+          if (d.truncated) pbits.push('仅显示前 ' + slides.length + ' 页');
+          sum.textContent = pbits.join(' · ');
+          body.className = 'pv-off-body pv-slides';
+          if (!slides.length) {
+            body.append(el('p', 'pv-hint2', '（空演示文稿）'));
+            return;
+          }
+          slides.forEach(function (sl) {
+            var card = el('section', 'pv-slide');
+            var head = el('div', 'pv-slide-head');
+            head.append(el('span', 'pv-slide-num', sl.index + ' / ' + slides.length));
+            if (sl.title) head.append(el('h3', 'pv-slide-title', sl.title));
+            card.append(head);
+            var sb = el('div', 'pv-slide-body');
+            renderOfficeBlocks(sb, sl.blocks);
+            if (!(sl.blocks && sl.blocks.length) && !sl.title) sb.append(el('p', 'pv-hint2', '（此页无文本内容）'));
+            card.append(sb);
+            if (sl.notes) {
+              var notes = el('div', 'pv-slide-notes');
+              notes.append(el('b', null, '演讲者备注：'), document.createTextNode(sl.notes));
+              card.append(notes);
+            }
+            body.append(card);
+          });
+        } else {
+          sum.textContent = '不支持的 Office 预览响应';
+          sum.className = 'pv-arch-sum err';
+        }
       })
       .catch(function (e) { if (e && e.name === 'AbortError') return; sum.textContent = '加载失败：' + (e && e.message || e); sum.className = 'pv-arch-sum err'; });
   }

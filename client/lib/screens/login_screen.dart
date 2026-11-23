@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/user.dart';
 import '../services/api.dart';
 import '../services/auth_store.dart';
+import '../services/deep_link.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 
@@ -63,6 +64,55 @@ class _LoginScreenState extends State<LoginScreen> {
         _err = '无法连接服务器：$e';
         _detail = requestUrl != null ? 'POST $requestUrl' : null;
       });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _pairLoginDialog() async {
+    final ctrl = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('扫码 / 配对码登录'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('在网页端「账号菜单 → 扫码配对客户端」中复制配对链接（clipboard://pair?...）或配对码粘贴到下方：'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autocorrect: false,
+            decoration: const InputDecoration(labelText: '配对链接或配对码', border: OutlineInputBorder()),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('配对登录')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (raw == null || raw.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _err = null;
+      _detail = null;
+    });
+    try {
+      String code = raw;
+      final uri = Uri.tryParse(raw);
+      final dl = uri != null ? parseDeepLink(uri) : null;
+      if (dl is PairLink) {
+        final b = await widget.api.setBase(dl.server);
+        if (mounted) _base.text = b;
+        code = dl.code;
+      } else {
+        final b = await widget.api.setBase(_base.text);
+        if (mounted) _base.text = b;
+      }
+      final user = await widget.api.claimPair(code);
+      if (mounted) widget.onLoggedIn(user);
+    } catch (e) {
+      if (mounted) setState(() => _err = '配对失败：$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -153,6 +203,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           onPressed: _busy ? null : _submit,
                         ),
                         const SizedBox(height: 8),
+                        InkButton(
+                          label: '配对码一键登录',
+                          icon: Icons.qr_code_scanner,
+                          block: true,
+                          onPressed: _busy ? null : _pairLoginDialog,
+                        ),
+                        const SizedBox(height: 6),
                         TextButton(
                           onPressed: _busy ? null : () => setState(() => _register = !_register),
                           child: Text(_register ? '已有账号？去登录' : '没有账号？去注册'),

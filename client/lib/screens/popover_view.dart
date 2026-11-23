@@ -204,6 +204,7 @@ class _PopoverViewState extends State<PopoverView> {
             MediaKind.image => Icons.image_outlined,
             MediaKind.video => Icons.play_circle_outline,
             MediaKind.audio => Icons.graphic_eq,
+            MediaKind.office => Icons.article_outlined,
             _ => Icons.insert_drive_file_outlined,
           };
     final title = it.isText ? (it.content ?? '').replaceAll('\n', ' ') : (it.filename ?? '');

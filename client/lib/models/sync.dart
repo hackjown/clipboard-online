@@ -30,17 +30,30 @@ class SyncDevice {
 }
 
 class SyncClip {
-  SyncClip({required this.text, required this.ts, required this.origin, required this.originName});
+  SyncClip({
+    required this.text,
+    required this.ts,
+    required this.origin,
+    required this.originName,
+    this.kind = 'text',
+    this.size = 0,
+  });
   final String text;
   final double ts;
   final String origin;
   final String originName;
+  final String kind; // text | image
+  final int size;
+
+  bool get isImage => kind == 'image';
 
   factory SyncClip.fromJson(Map<String, dynamic> j) => SyncClip(
         text: (j['text'] ?? '').toString(),
         ts: (j['ts'] as num?)?.toDouble() ?? 0,
         origin: (j['origin'] ?? '').toString(),
         originName: (j['origin_name'] ?? '其他设备').toString(),
+        kind: (j['kind'] ?? 'text').toString(),
+        size: (j['size'] as num?)?.toInt() ?? 0,
       );
 }
 

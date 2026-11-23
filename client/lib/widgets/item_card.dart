@@ -146,13 +146,36 @@ class ItemCard extends StatelessWidget {
                         MediaKind.pdf => 'PDF · 点击查看',
                         MediaKind.text => '文本文件 · 点击预览',
                         MediaKind.archive => '压缩包 · 点击查看目录',
+                        MediaKind.office => 'Office 文档 · 点击预览',
                         _ => '点击查看 / 分享',
                       },
                       style: t.monoStyle(12.5, color: t.muted).copyWith(height: 1.3),
                     ),
+                    if (item.note.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(item.note, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: t.muted)),
+                    ],
                   ]),
                 ),
               ]),
+            )
+          else if (item.encrypted)
+            GestureDetector(
+              onTap: onOpen,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: t.paper2,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: t.accent, width: 1.5),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('🔒 端到端加密内容', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+                  const SizedBox(height: 3),
+                  Text('服务器仅保存密文 · 点击输入口令在本地解密', style: t.monoStyle(12, color: t.muted)),
+                ]),
+              ),
             )
           else
             GestureDetector(
@@ -201,12 +224,14 @@ class ItemCard extends StatelessWidget {
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (item.isText)
+              if (item.isText && !item.encrypted)
                 InkButton(label: '复制', icon: Icons.copy_rounded, onPressed: onCopy)
+              else if (item.isText && item.encrypted)
+                InkButton(label: '解密', icon: Icons.vpn_key_outlined, variant: InkVariant.accent, onPressed: onOpen)
               else
                 InkButton(label: '预览', icon: Icons.visibility_outlined, onPressed: onOpen),
-              if (onEdit != null && item.isText && item.mine)
-                InkButton(label: '编辑', icon: Icons.edit_outlined, onPressed: onEdit),
+              if (onEdit != null && item.mine && (!item.isText || !item.encrypted))
+                InkButton(label: item.isFile ? '备注/改名' : '编辑', icon: Icons.edit_outlined, onPressed: onEdit),
               if (onSystemShare != null)
                 InkButton(label: '分享', icon: Icons.ios_share, variant: InkVariant.ink, onPressed: onSystemShare),
               if (onReveal != null)
@@ -256,6 +281,7 @@ class _FileTile extends StatelessWidget {
       MediaKind.text => (Icons.description_outlined, t.sun),
       MediaKind.image => (Icons.image_outlined, t.sky),
       MediaKind.archive => (Icons.folder_zip_outlined, t.lime),
+      MediaKind.office => (Icons.article_outlined, t.sun),
       _ => (Icons.insert_drive_file_outlined, t.sky),
     };
     return Container(

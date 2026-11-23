@@ -50,6 +50,7 @@
     share: P('M16 6a3 3 0 1 0-2.8-4M16 6l-8 5M8 11a3 3 0 1 0 0 2M8 13l8 5M16 18a3 3 0 1 0 0 0.01'),
     clock: '<circle cx="12" cy="12" r="9"/>' + P('M12 7v5l3 2'),
     tag: P('M4 11V5a1 1 0 0 1 1-1h6l9 9-7 7zM7.5 7.5h.01'),
+    key: '<circle cx="8" cy="15" r="4"/>' + P('M11 12l9-9M16 7l2 2M19 4l2 2'),
   };
   function iconSVG(name) {
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -203,7 +204,7 @@
     items: [], counts: { total: 0, text: 0, file: 0, bytes: 0, public: 0, private: 0, starred: 0 },
     tags: [], filter: 'all', scope: 'public', q: '', tag: '', starred: false, loaded: false,
     user: null, cfg: { register: true, max_upload: 200 * 1048576 },
-    ws: false,
+    ws: false, batch: false, selected: new Set(),
   };
   const list = $('#list');
   const cache = new Map();
@@ -235,12 +236,14 @@
     return data;
   }
 
-  function toast(msg, kind = 'ok') {
+  function toast(msg, kind = 'ok', action = null) {
     const box = $('#toasts');
     while (box.children.length >= 3) box.firstChild.remove();
-    const t = h('div', { class: 'toast' + (kind === 'err' ? ' err' : '') }, h('span', { class: 't-ico' }, icon(kind === 'err' ? 'x' : 'check')), h('span', { text: msg }));
+    const actBtn = action ? h('button', { type: 'button', class: 'toast-act', text: action.label, onclick: () => { t.remove(); action.onClick(); } }) : null;
+    const t = h('div', { class: 'toast' + (kind === 'err' ? ' err' : '') }, h('span', { class: 't-ico' }, icon(kind === 'err' ? 'x' : 'check')), h('span', { text: msg }), actBtn);
     box.append(t);
-    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, kind === 'err' ? 3800 : 2400);
+    const ms = action ? 6000 : (kind === 'err' ? 3800 : 2400);
+    setTimeout(() => { if (!t.isConnected) return; t.classList.add('out'); setTimeout(() => t.remove(), 320); }, ms);
   }
 
   async function copyText(t) {
@@ -259,6 +262,7 @@
       src: '/download/' + encodeURIComponent(x.filename) + '?inline=1',
       dl: '/download/' + encodeURIComponent(x.filename),
       archive: x.preview === 'archive' ? '/api/items/' + encodeURIComponent(x.uuid) + '/archive' : undefined,
+      office: x.preview === 'office' ? '/api/items/' + encodeURIComponent(x.uuid) + '/office' : undefined,
     }));
   }
   function openPreview(it) {
@@ -278,8 +282,19 @@
     const visChip = h('span', { class: 'chip ' + (it.visibility === 'public' ? 'chip--pub' : 'chip--priv') },
       icon(it.visibility === 'public' ? 'globe' : 'lock'), it.visibility === 'public' ? '公共' : '私有');
     const typeChip = h('span', { class: 'chip ' + (it.type === 'text' ? 'chip--text' : 'chip--file') },
-      icon(it.type === 'text' ? 'text' : 'file'), it.type === 'text' ? '文本' : '文件');
-    const headKids = [typeChip, visChip];
+      icon(it.type === 'text' ? 'text' : 'file'), it.type === 'text' ? (it.encrypted ? '加密文本' : '文本') : '文件');
+    const headKids = [];
+    if (state.batch) {
+      const ck = h('input', { type: 'checkbox', class: 'batch-ck', checked: state.selected.has(it.uuid), 'aria-label': '选择此条目' });
+      ck.addEventListener('change', () => {
+        if (ck.checked) state.selected.add(it.uuid); else state.selected.delete(it.uuid);
+        art.classList.toggle('is-sel', ck.checked);
+        renderBatchBar();
+      });
+      if (state.selected.has(it.uuid)) art.classList.add('is-sel');
+      headKids.push(ck);
+    }
+    headKids.push(typeChip, visChip);
     const rem = fmtRemain(it.expires_at);
     if (rem) headKids.push(h('span', { class: 'exp-pill ' + rem.cls }, icon('clock'), rem.text));
     headKids.push(timeEl);
@@ -320,11 +335,47 @@
 
     const actions = h('div', { class: 'actions wrap' });
     if (it.mine) {
-      if (it.type === 'text') actions.append(h('button', { type: 'button', class: 'btn sm btn--edit', onclick: () => openEdit(it) }, h('span', { text: '编辑' })));
+      if (it.type === 'text' && !it.encrypted) actions.append(h('button', { type: 'button', class: 'btn sm btn--edit', onclick: () => openEdit(it) }, h('span', { text: '编辑' })));
+      if (it.type === 'file') actions.append(h('button', { type: 'button', class: 'btn sm btn--edit', onclick: () => openEditFile(it) }, h('span', { text: '备注/改名' })));
       actions.append(h('button', { type: 'button', class: 'btn btn--del sm', onclick: () => confirmDelete(it) }, icon('trash'), h('span', { text: '删除' })));
     }
 
-    if (it.type === 'text') {
+    if (it.type === 'text' && it.encrypted) {
+      let plain = null;
+      const body = h('div', { class: 'e2ee-box' }, h('b', { text: '🔒 端到端加密内容' }), h('small', { text: '服务器仅保存密文，点击输入口令在本地解密' }));
+      const decBtn = h('button', { type: 'button', class: 'btn btn--accent sm' }, icon('key'), h('span', { text: '解密查看' }));
+      const copyDec = h('button', { type: 'button', class: 'btn btn--ink sm', hidden: true }, icon('copy'), h('span', { text: '复制明文' }));
+      decBtn.onclick = async () => {
+        if (plain !== null) {
+          plain = null;
+          body.className = 'e2ee-box';
+          body.replaceChildren(h('b', { text: '🔒 端到端加密内容' }), h('small', { text: '已重新锁定' }));
+          decBtn.replaceChildren(icon('key'), h('span', { text: '解密查看' }));
+          copyDec.hidden = true;
+          return;
+        }
+        const pw = prompt('请输入此条目的解密口令：');
+        if (!pw) return;
+        try {
+          const env = JSON.parse(it.content);
+          const salt = window.ClipVault.crypto.b64Decode(env.salt);
+          const kh = await window.ClipVault.crypto.deriveKey(pw, salt, env.iterations || 200000);
+          const dec = await window.ClipVault.crypto.decryptVault(env, kh);
+          plain = (dec.items && dec.items[0] && dec.items[0].text) || '';
+          body.className = 'text-body mono';
+          body.textContent = plain;
+          decBtn.replaceChildren(icon('lock'), h('span', { text: '重新锁定' }));
+          copyDec.hidden = false;
+        } catch (ex) {
+          toast('解密失败：口令错误或数据损坏', 'err');
+        }
+      };
+      copyDec.onclick = async () => { if (plain != null && await copyText(plain)) toast('明文已复制'); };
+      actions.prepend(copyDec, decBtn);
+      art.append(body, actions);
+      card.setQuery = () => {};
+      card.tick = () => { timeEl.replaceChildren(fmtTime(it.created), h('span', { class: 'sep', text: '·' }), 'E2EE'); timeEl.title = fmtFull(it.created); };
+    } else if (it.type === 'text') {
       const chars = [...it.content].length;
       const mono = looksLikeCode(it.content) && !it.looks_md;
       const body = h('div', { class: 'text-body' + (mono ? ' mono' : '') });
@@ -394,11 +445,15 @@
       const name = h('div', { class: 'fname' });
       const sub = h('div', { class: 'fsub', text: `${(it.ext || '—').toUpperCase()} · ${fmtSize(it.size)}` });
       if (it.is_image) {
-        const src = '/download/' + encodeURIComponent(it.filename);
-        const img = h('img', { class: 'thumb', src, alt: it.filename, loading: 'lazy', onclick: () => openPreview(it) });
+        const orig = '/download/' + encodeURIComponent(it.filename);
+        const src = it.thumb_url || orig;
+        const img = h('img', { class: 'thumb', src, alt: it.filename, loading: 'lazy', onclick: () => openPreview(it),
+          onerror: (e) => { if (e.target.src.indexOf('/thumb') >= 0) e.target.src = orig; } });
         art.append(img);
       }
-      const row = h('div', { class: 'file-row' + (it.preview ? ' pv-able' : '') }, fileTile(it.ext), h('div', { class: 'fmeta' }, name, sub));
+      const fmeta = h('div', { class: 'fmeta' }, name, sub);
+      if (it.note) fmeta.append(h('div', { class: 'fnote', text: it.note }));
+      const row = h('div', { class: 'file-row' + (it.preview ? ' pv-able' : '') }, fileTile(it.ext), fmeta);
       if (it.preview && !it.is_image) { row.onclick = () => openPreview(it); row.title = '点击预览'; }
       art.append(row);
       const dl = h('a', { class: 'btn btn--ink sm', href: '/download/' + encodeURIComponent(it.filename), download: it.filename }, icon('download'), h('span', { text: '下载' }));
@@ -419,7 +474,7 @@
     if (state.starred && !it.favorite) return false;
     if (state.tag && !(it.tags || []).includes(state.tag)) return false;
     if (!state.q) return true;
-    const hay = ((it.type === 'text' ? it.content : it.filename) + ' ' + (it.owner_username || '') + ' ' + (it.tags || []).join(' ')).toLowerCase();
+    const hay = ((it.type === 'text' ? (it.encrypted ? '' : it.content) : it.filename) + ' ' + (it.note || '') + ' ' + (it.owner_username || '') + ' ' + (it.tags || []).join(' ')).toLowerCase();
     return hay.includes(state.q.toLowerCase());
   }
 
@@ -434,7 +489,7 @@
     const live = () => Array.from(list.children).filter((e) => !e.classList.contains('leaving'));
     vis.forEach((it, idx) => {
       let c = cache.get(it.uuid);
-      const sig = [it.mine, it.favorite, it.pinned, (it.tags || []).join(','), it.expires_at, it.has_share, it.updated, it.size, it.visibility].join('|');
+      const sig = [it.mine, it.favorite, it.pinned, (it.tags || []).join(','), it.expires_at, it.has_share, it.updated, it.size, it.visibility, it.note || '', it.filename || '', it.encrypted ? 1 : 0, state.batch ? 1 : 0, state.selected.has(it.uuid) ? 1 : 0].join('|');
       if (!c) {
         c = makeCard(it); c._sig = sig; cache.set(it.uuid, c);
         c.el.classList.add('enter');
@@ -701,6 +756,12 @@
     const exp = expiryPicker(defVis);
 
     const ta = h('textarea', { class: 'ta', placeholder: '输入或粘贴文本… 也可直接 Ctrl+V 粘贴截图', 'aria-label': '文本内容', rows: 6 });
+    const e2eeCk = h('input', { type: 'checkbox' });
+    const e2eePw = h('input', { type: 'password', class: 'vt-in', placeholder: '设置本条加密口令（至少 4 位，服务器仅存密文）', hidden: true, style: 'margin-top:6px' });
+    e2eeCk.addEventListener('change', () => { e2eePw.hidden = !e2eeCk.checked; if (e2eeCk.checked) e2eePw.focus(); });
+    const e2eeRow = h('div', { style: 'margin-top:8px' },
+      h('label', { style: 'display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;cursor:pointer' }, e2eeCk, h('span', { text: '🔒 口令端到端加密（服务器仅存密文）' })),
+      e2eePw);
     const hint = h('span', { class: 'hint', text: '0 字 · Ctrl/⌘ + Enter 添加' });
     const addBtn = h('button', { type: 'button', class: 'btn btn--accent' }, icon('plus'), h('span', { text: '添加' }));
     ta.addEventListener('input', () => { hint.textContent = `${[...ta.value].length} 字 · Ctrl/⌘ + Enter 添加`; });
@@ -708,12 +769,27 @@
     const doAdd = async (visibility) => {
       const v = ta.value;
       if (!v.trim()) { ta.focus(); toast('请先输入内容', 'err'); return; }
+      let payloadContent = v;
+      let isEnc = false;
+      if (e2eeCk.checked) {
+        if (!window.ClipVault || !window.ClipVault.crypto) { toast('加密模块未加载', 'err'); return; }
+        if (e2eePw.value.length < 4) { e2eePw.focus(); toast('加密口令至少 4 位', 'err'); return; }
+        addBtn.disabled = true;
+        try {
+          const salt = new Uint8Array(16); crypto.getRandomValues(salt);
+          const kh = await window.ClipVault.crypto.deriveKey(e2eePw.value, salt, 200000);
+          const env = await window.ClipVault.crypto.encryptVault({ v: 1, items: [{ text: v }] }, kh, salt, 200000);
+          payloadContent = JSON.stringify(env);
+          isEnc = true;
+        } catch (ex) { addBtn.disabled = false; toast('加密失败：' + ex.message, 'err'); return; }
+      }
       addBtn.disabled = true;
       try {
-        const r = await api('/content', { method: 'POST', body: { content: v, visibility, expires_in: exp.getSec() } });
+        const r = await api('/content', { method: 'POST', body: { content: payloadContent, visibility, expires_in: exp.getSec(), encrypted: isEnc } });
         addBtn.disabled = false; addBtn.classList.add('done');
         addBtn.replaceChildren(icon('check'), h('span', { text: '已添加' }));
-        ta.value = ''; hint.textContent = '0 字 · Ctrl/⌘ + Enter 添加';
+        ta.value = ''; e2eePw.value = ''; e2eeCk.checked = false; e2eePw.hidden = true;
+        hint.textContent = '0 字 · Ctrl/⌘ + Enter 添加';
         if (visibility === 'private' && state.scope === 'public') setScope('private');
         else refreshScoped(new Set([r.uuid]));
         setTimeout(() => { addBtn.classList.remove('done'); addBtn.replaceChildren(icon('plus'), h('span', { text: '添加' })); }, 2000);
@@ -724,7 +800,7 @@
     const submit = () => {
       const v = ta.value;
       const visibility = vis.dataset.vis;
-      if (visibility === 'public' && isSensitive(v)) {
+      if (visibility === 'public' && !e2eeCk.checked && isSensitive(v)) {
         confirmSensitive(v, () => doAdd('public'), () => { vis.dataset.vis = 'private'; $$('.vistog-btn', vis).forEach((x) => x.setAttribute('aria-checked', String(x.dataset.vis === 'private'))); exp.setDefaultFor('private'); doAdd('private'); });
         return;
       }
@@ -732,7 +808,7 @@
     };
     addBtn.addEventListener('click', submit);
     ta.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); } });
-    const textPane = h('div', { class: 'pane' }, ta, h('div', { class: 'row-between' }, hint, addBtn));
+    const textPane = h('div', { class: 'pane' }, ta, e2eeRow, h('div', { class: 'row-between' }, hint, addBtn));
 
     const input = h('input', { type: 'file', multiple: true, id: 'fileInput', tabindex: '-1' }); // 不设 accept：任意类型、可多选（移动端也能选非图片）
     const dz = h('label', { class: 'dz', tabindex: '0' }, icon('upload'), h('b', { text: '点击选择，或拖到这里' }), h('small', { text: `支持截图粘贴 · 单文件最大 ${fmtSize(state.cfg.max_upload)}` }), input);
@@ -874,31 +950,90 @@
   async function openShare(it) {
     let token = it.share_token;
     let shareExp = it.share_expires_at;
+    let hasPw = !!it.share_has_password;
+    let maxViews = it.share_max_views || 0;
     if (!token) {
       try {
         const r = await api('/api/items/' + it.uuid + '/share', { method: 'POST', body: { hours: 24 * 7 } });
-        token = r.token; shareExp = r.share_expires_at; it.share_token = token; it.has_share = true;
+        token = r.token; shareExp = r.share_expires_at; hasPw = !!r.has_password; maxViews = r.max_views || 0;
+        it.share_token = token; it.has_share = true;
       } catch (e) { toast(e.message, 'err'); return; }
     }
-    const url = location.origin + '/s/' + token;
-    const input = h('input', { type: 'text', value: url, readonly: true, onclick: (e) => e.target.select() });
-    const copyBtn = h('button', { type: 'button', class: 'btn btn--ink', onclick: async () => {
-      if (await copyText(url)) { copyBtn.replaceChildren(icon('check'), h('span', { text: '已复制' })); setTimeout(() => copyBtn.replaceChildren(icon('copy'), h('span', { text: '复制' })), 2000); }
-    } }, icon('copy'), h('span', { text: '复制' }));
+    const urlInput = h('input', { type: 'text', value: location.origin + '/s/' + token, readonly: true, onclick: (e) => e.target.select() });
     const qrImg = h('img', { alt: '二维码', src: '/api/share/' + encodeURIComponent(token) + '/qr' });
+    const statusLine = h('p', { class: 'hint' });
+    const syncStatus = () => {
+      const bits = [shareExp ? ('有效至 ' + fmtFull(shareExp)) : '永不过期'];
+      if (hasPw) bits.push('🔒 需提取码');
+      if (maxViews) bits.push(`🔥 限 ${maxViews} 次` + (maxViews === 1 ? '（阅后即焚）' : ''));
+      statusLine.textContent = bits.join(' · ');
+    };
+    syncStatus();
+
+    const copyBtn = h('button', { type: 'button', class: 'btn btn--ink', onclick: async () => {
+      if (await copyText(urlInput.value)) { copyBtn.replaceChildren(icon('check'), h('span', { text: '已复制' })); setTimeout(() => copyBtn.replaceChildren(icon('copy'), h('span', { text: '复制' })), 2000); }
+    } }, icon('copy'), h('span', { text: '复制' }));
+
+    const pwInput = h('input', { type: 'text', class: 'vt-in', placeholder: '可选提取码（留空=免密）', maxlength: '32' });
+    const mvSel = h('select', { class: 'vt-in' },
+      ...[ [0, '访问次数：不限'], [1, '🔥 1 次（阅后即焚）'], [3, '限 3 次'], [5, '限 5 次'], [10, '限 10 次'] ]
+        .map(([v, t]) => h('option', { value: String(v), selected: v === maxViews ? 'selected' : false, text: t })));
+    const regenBtn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      regenBtn.disabled = true;
+      try {
+        const r = await api('/api/items/' + it.uuid + '/share', {
+          method: 'POST',
+          body: { hours: 24 * 7, password: pwInput.value.trim(), max_views: parseInt(mvSel.value, 10) || 0 },
+        });
+        token = r.token; shareExp = r.share_expires_at; hasPw = !!r.has_password; maxViews = r.max_views || 0;
+        it.share_token = token; it.has_share = true; it.share_has_password = hasPw; it.share_max_views = maxViews || null;
+        urlInput.value = location.origin + '/s/' + token;
+        qrImg.src = '/api/share/' + encodeURIComponent(token) + '/qr?t=' + Date.now();
+        syncStatus();
+        toast('已应用安全设置并更新链接');
+        refreshScoped();
+      } catch (e) { toast(e.message, 'err'); }
+      finally { regenBtn.disabled = false; }
+    } }, '更新安全设置');
+
     const revoke = h('button', { type: 'button', class: 'btn btn--ghost btn--block', onclick: async () => {
       await api('/api/items/' + it.uuid + '/share', { method: 'DELETE' });
       it.share_token = null; it.has_share = false; toast('已撤销分享'); closeSheet(); refreshScoped();
     } }, '撤销分享链接');
     const note = h('p', { class: 'lead', text: it.visibility === 'private'
-      ? '这是私有内容的临时分享链接：任何人凭链接可查看/下载，直到过期或你撤销。'
+      ? '私有内容临时分享链接：可附加提取码或设为「阅后即焚」。'
       : '公共内容分享链接，访客无需登录即可打开。' });
-    const expNote = shareExp ? h('p', { class: 'hint', text: '链接有效至 ' + fmtFull(shareExp) }) : h('p', { class: 'hint', text: '链接永不过期（可随时撤销）' });
     showSheet('share', h('div', {},
       h('h2', { id: 'sheetTitle', text: '分享' }), note,
       h('div', { class: 'qr-wrap' }, qrImg),
-      h('div', { class: 'share-link' }, input, copyBtn), expNote, revoke,
+      h('div', { class: 'share-link' }, urlInput, copyBtn), statusLine,
+      h('div', { class: 'share-opts' }, pwInput, mvSel, regenBtn),
+      revoke,
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '关闭'))));
+  }
+
+  function openEditFile(it) {
+    const fnIn = h('input', { type: 'text', class: 'vt-in', value: it.filename || '', placeholder: '文件名' });
+    const noteIn = h('textarea', { class: 'ta', rows: 4, placeholder: '添加文件备注（支持搜索）' });
+    noteIn.value = it.note || '';
+    const err = h('p', { class: 'err', hidden: true });
+    const save = h('button', { type: 'button', class: 'btn btn--accent' }, icon('check'), h('span', { text: '保存' }));
+    save.onclick = async () => {
+      const fn = fnIn.value.trim();
+      if (!fn) { err.textContent = '文件名不能为空'; err.hidden = false; return; }
+      save.disabled = true; err.hidden = true;
+      try {
+        await api('/api/items/' + it.uuid, { method: 'PATCH', body: { filename: fn, note: noteIn.value.trim() } });
+        toast('已更新'); closeSheet(); refreshScoped();
+      } catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    };
+    showSheet('edit-file', h('div', {},
+      h('h2', { id: 'sheetTitle', text: '文件重命名与备注' }),
+      h('label', { class: 'field' }, h('span', { text: '文件名' }), fnIn),
+      h('label', { class: 'field', style: 'margin-top:10px' }, h('span', { text: '备注' }), noteIn),
+      err,
+      h('div', { class: 'btn-row', style: 'margin-top:14px' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'), save)));
+    setTimeout(() => fnIn.focus(), 80);
   }
 
   function openEdit(it) {
@@ -970,12 +1105,19 @@
   }
   function confirmDelete(it) {
     const isText = it.type === 'text';
-    confirmView({ title: '删除这条内容？', desc: '删除后无法恢复。', preview: isText ? it.content.slice(0, 160) : it.filename, mono: isText && looksLikeCode(it.content), okText: '删除',
+    confirmView({ title: '移入回收站？', desc: '条目将在回收站保留 7 天，可随时撤销恢复。', preview: isText ? (it.encrypted ? '🔒 端到端加密内容' : it.content.slice(0, 160)) : it.filename, mono: isText && !it.encrypted && looksLikeCode(it.content), okText: '删除',
       onOk: async () => {
         await api('/delete', { method: 'POST', body: { uuid: it.uuid } });
         const c = cache.get(it.uuid);
         if (c) { c.el.classList.add('leaving'); setTimeout(() => c.el.remove(), 450); cache.delete(it.uuid); }
-        setTimeout(() => refreshScoped(), 420); toast('已删除');
+        setTimeout(() => refreshScoped(), 420);
+        toast('已移入回收站', 'ok', {
+          label: '撤销',
+          onClick: async () => {
+            try { await api('/api/trash/' + encodeURIComponent(it.uuid) + '/restore', { method: 'POST' }); toast('已恢复'); refreshScoped(); }
+            catch (e) { toast(e.message, 'err'); }
+          },
+        });
       } });
   }
   function confirmClear(scope) {
@@ -1007,6 +1149,7 @@
     const list = h('ul', { class: 'devlist' });
     const instLine = h('p', { class: 'hint', text: '' });
     const latestBox = h('div', { class: 'preview mono', text: '加载中…' });
+    const latestImg = h('img', { class: 'thumb', hidden: true, alt: '同步图片', style: 'max-height:180px;cursor:default' });
     const latestMeta = h('p', { class: 'hint', text: '' });
     let latestText = '';
     const copyBtn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
@@ -1014,6 +1157,19 @@
       try { await navigator.clipboard.writeText(latestText); toast('已复制到本机剪贴板'); } catch (_) { toast('浏览器不允许写剪贴板，请手动复制', 'err'); }
     } }, icon('copy'), h('span', { text: '复制到本机' }));
     const ta = h('textarea', { class: 'ta', rows: 3, placeholder: '输入文本，发送到我所有开启了同步的设备的剪贴板' });
+    const imgIn = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    imgIn.onchange = async () => {
+      const f = imgIn.files && imgIn.files[0]; if (!f) return;
+      imgIn.value = '';
+      if (f.size > 4 * 1024 * 1024) { toast('同步图片不能超过 4 MB', 'err'); return; }
+      const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(f); });
+      try {
+        await api('/api/devices/' + encodeURIComponent(DEVICE_ID), { method: 'PUT', body: { name: '网页浏览器', platform: 'web', direction: 'send' } }).catch(() => {});
+        const r = await api('/api/clipsync', { method: 'POST', body: { kind: 'image', image_b64: b64 } });
+        toast(r.duplicate ? '图片与当前同步剪贴板相同' : '图片已同步到你的其他设备'); load();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const imgBtn = h('button', { type: 'button', class: 'btn', onclick: () => imgIn.click() }, icon('upload'), h('span', { text: '发送图片' }));
     const send = async (text) => {
       if (!text || !text.trim()) { toast('内容为空', 'err'); return; }
       try {
@@ -1022,10 +1178,10 @@
         toast(r.duplicate ? '内容与当前同步剪贴板相同' : '已同步到你的其他设备'); ta.value = ''; load();
       } catch (e) { toast(e.message, 'err'); }
     };
-    const sendBtn = h('button', { type: 'button', class: 'btn btn--accent', onclick: () => send(ta.value) }, icon('upload'), h('span', { text: '发送到我的设备' }));
+    const sendBtn = h('button', { type: 'button', class: 'btn btn--accent', onclick: () => send(ta.value) }, icon('upload'), h('span', { text: '发送文本' }));
     const readBtn = h('button', { type: 'button', class: 'btn', onclick: async () => {
       try { send(await navigator.clipboard.readText()); } catch (_) { toast('浏览器不允许读取剪贴板，请粘贴到输入框', 'err'); }
-    } }, icon('copy'), h('span', { text: '读取本机剪贴板并发送' }));
+    } }, icon('copy'), h('span', { text: '读剪贴板发送' }));
     async function load() {
       try {
         const [d, c] = await Promise.all([api('/api/devices'), api('/api/clipsync')]);
@@ -1038,18 +1194,27 @@
             try { await api('/api/devices/' + encodeURIComponent(x.device_id), { method: 'DELETE' }); load(); } catch (e) { toast(e.message, 'err'); }
           } }, '移除'))) : [h('li', { class: 'hint', text: '还没有设备开启同步。在 Mac / iPhone / Android 客户端的「设置 → 多设备剪贴板同步」里打开。' })]));
         instLine.textContent = `账号 ${d.user || '—'} · 服务器实例 ${d.instance || '—'} · 实时连接 ${state.ws ? '已连接' : '未连接'}（各设备的账号与实例须一致）`;
-        latestText = (c.clip && c.clip.text) || '';
-        latestBox.textContent = latestText ? latestText.slice(0, 400) + (latestText.length > 400 ? '…' : '') : '（还没有同步过内容）';
-        latestMeta.textContent = c.clip ? `来自「${c.clip.origin_name}」 · ${fmtTime(c.clip.ts)}` : '';
-        copyBtn.disabled = !latestText;
+        const isImg = c.clip && c.clip.kind === 'image';
+        latestImg.hidden = !isImg;
+        latestBox.hidden = !!isImg;
+        if (isImg) {
+          latestImg.src = '/api/clipsync/image?t=' + encodeURIComponent(String(c.clip.ts || Date.now()));
+          latestText = '';
+          copyBtn.disabled = true;
+        } else {
+          latestText = (c.clip && c.clip.text) || '';
+          latestBox.textContent = latestText ? latestText.slice(0, 400) + (latestText.length > 400 ? '…' : '') : '（还没有同步过内容）';
+          copyBtn.disabled = !latestText;
+        }
+        latestMeta.textContent = c.clip ? `来自「${c.clip.origin_name}」 · ${fmtTime(c.clip.ts)}` + (isImg ? ` · 图片 ${fmtSize(c.clip.size)}` : '') : '';
       } catch (e) { latestBox.textContent = e.message; }
     }
     clipView = { load };
     showSheet('clipsync', h('div', {}, h('h2', { id: 'sheetTitle', text: '多设备剪贴板同步' }),
-      h('p', { class: 'lead', text: '在一台设备上复制，其他设备的剪贴板自动更新（客户端里按设备开关、可选方向）。浏览器无法后台监听剪贴板，这里可以手动发送 / 复制。' }),
-      h('p', { class: 'hint', text: '当前同步剪贴板' }), latestBox, h('div', { class: 'row-between' }, latestMeta, copyBtn),
+      h('p', { class: 'lead', text: '支持文本与图片跨设备实时同步。浏览器可手动发送文本或图片到你的其他设备。' }),
+      h('p', { class: 'hint', text: '当前同步剪贴板' }), latestImg, latestBox, h('div', { class: 'row-between' }, latestMeta, copyBtn),
       h('p', { class: 'hint', text: '我的设备' }), instLine, list,
-      h('p', { class: 'hint', text: '发送' }), ta, h('div', { class: 'btn-row' }, readBtn, sendBtn)));
+      h('p', { class: 'hint', text: '发送' }), ta, imgIn, h('div', { class: 'btn-row' }, readBtn, imgBtn, sendBtn)));
     load();
   }
 
@@ -1095,19 +1260,186 @@
     return wrap;
   }
 
+  function openVault() {
+    if (!state.user) { openAuth('login'); return; }
+    closeSheet();
+    if (window.ClipVault) window.ClipVault.open({ toast });
+  }
+
+  // ---- 批量多选模式 & 浮动操作条 ----
+  let batchBarEl = null;
+  function toggleBatchMode(force) {
+    state.batch = force !== undefined ? !!force : !state.batch;
+    if (!state.batch) state.selected.clear();
+    const btn = $('#batchToggle');
+    if (btn) btn.classList.toggle('on', state.batch);
+    render();
+    renderBatchBar();
+  }
+  function renderBatchBar() {
+    if (!state.batch) { if (batchBarEl) { batchBarEl.remove(); batchBarEl = null; } return; }
+    if (!batchBarEl) {
+      batchBarEl = h('div', { class: 'batch-bar', role: 'toolbar' });
+      document.body.append(batchBarEl);
+    }
+    const ids = Array.from(state.selected);
+    const n = ids.length;
+    const doZip = async () => {
+      if (!n) return;
+      try {
+        const r = await fetch('/api/items/zip', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uuids: ids }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || d.detail || '打包失败'); }
+        const blob = await r.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `clipboard-batch-${new Date().toISOString().slice(0, 10)}.zip`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+        toast(`已打包下载 ${n} 项`);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const doBatchTag = async () => {
+      if (!n) return;
+      const raw = prompt('为选中的条目追加标签（多个用逗号分隔）：');
+      if (!raw || !raw.trim()) return;
+      const tags = raw.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      try {
+        const r = await api('/api/items/batch', { method: 'POST', body: { action: 'tag', uuids: ids, tags } });
+        toast(`已为 ${r.affected} 项添加标签`); toggleBatchMode(false); refreshScoped();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const doBatchVis = async (visibility) => {
+      if (!n) return;
+      try {
+        const r = await api('/api/items/batch', { method: 'POST', body: { action: 'visibility', uuids: ids, visibility } });
+        toast(`已修改 ${r.affected} 项为${visibility === 'private' ? '私有' : '公共'}`); toggleBatchMode(false); refreshScoped();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const doBatchDel = async () => {
+      if (!n || !confirm(`将选中的 ${n} 条自己的内容移入回收站？`)) return;
+      try {
+        const r = await api('/api/items/batch', { method: 'POST', body: { action: 'delete', uuids: ids } });
+        toast(`已将 ${r.affected} 项移入回收站`); toggleBatchMode(false); refreshScoped();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const selAll = () => {
+      const vis = state.items.filter(matches);
+      if (state.selected.size >= vis.length) state.selected.clear();
+      else vis.forEach((x) => state.selected.add(x.uuid));
+      render(); renderBatchBar();
+    };
+    batchBarEl.replaceChildren(
+      h('span', { class: 'batch-cnt', text: `已选 ${n} 项` }),
+      h('button', { type: 'button', class: 'btn sm', onclick: selAll }, '全选'),
+      h('button', { type: 'button', class: 'btn sm btn--ink', disabled: !n, onclick: doZip }, '打包 ZIP'),
+      state.user ? h('button', { type: 'button', class: 'btn sm', disabled: !n, onclick: doBatchTag }, '加标签') : null,
+      state.user ? h('button', { type: 'button', class: 'btn sm', disabled: !n, onclick: () => doBatchVis('private') }, '设私有') : null,
+      state.user ? h('button', { type: 'button', class: 'btn sm btn--danger', disabled: !n, onclick: doBatchDel }, '删除') : null,
+      h('button', { type: 'button', class: 'btn sm btn--ghost', onclick: () => toggleBatchMode(false) }, '完成')
+    );
+  }
+
+  // ---- 回收站 ----
+  function openTrash() {
+    const listBox = h('div', { class: 'pick' }, h('p', { class: 'hint', text: '加载中…' }));
+    const emptyBtn = h('button', { type: 'button', class: 'btn btn--danger', onclick: async () => {
+      if (!confirm('确认彻底清空回收站？所有已删条目与文件将永久删除且无法恢复。')) return;
+      try { const r = await api('/api/trash/empty', { method: 'POST' }); toast(`已永久清除 ${r.removed} 项`); load(); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '清空回收站');
+    async function load() {
+      try {
+        const d = await api('/api/trash');
+        if (!d.items.length) { listBox.replaceChildren(h('p', { class: 'hint', text: '回收站是空的（删除的条目会在此保留 7 天）。' })); emptyBtn.disabled = true; return; }
+        emptyBtn.disabled = false;
+        listBox.replaceChildren(...d.items.map((it) => {
+          const title = it.type === 'text' ? (it.encrypted ? '🔒 加密文本' : (it.content || '').slice(0, 60)) : (it.filename || '文件');
+          return h('div', { class: 'dev' },
+            h('span', { class: 'dev-main' }, h('b', { text: title }), h('small', { text: `${it.type === 'text' ? '文本' : fmtSize(it.size)} · 删除于 ${fmtTime(it.deleted_at)}` })),
+            h('button', { type: 'button', class: 'btn sm btn--accent', onclick: async () => {
+              try { await api('/api/trash/' + encodeURIComponent(it.uuid) + '/restore', { method: 'POST' }); toast('已恢复'); load(); refreshScoped(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '恢复'),
+            h('button', { type: 'button', class: 'btn sm btn--ghost', onclick: async () => {
+              try { await api('/delete', { method: 'POST', body: { uuid: it.uuid, permanent: true } }); toast('已永久删除'); load(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '彻底删'));
+        }));
+      } catch (e) { listBox.replaceChildren(h('p', { class: 'err', text: e.message })); }
+    }
+    showSheet('trash', h('div', {},
+      h('h2', { id: 'sheetTitle', text: '回收站' }),
+      h('p', { class: 'lead', text: '删除的条目保留 7 天，可一键恢复或彻底清除。' }),
+      listBox,
+      h('div', { class: 'btn-row' }, emptyBtn, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '关闭'))));
+    load();
+  }
+
+  // ---- 扫码快速配对登录客户端 ----
+  async function openPairModal() {
+    try {
+      const r = await api('/api/pair/create', { method: 'POST' });
+      const qr = h('img', { alt: '配对登录二维码', src: r.qr_url });
+      const uriIn = h('input', { type: 'text', value: r.uri, readonly: true, onclick: (e) => e.target.select() });
+      const cp = h('button', { type: 'button', class: 'btn btn--ink', onclick: async () => { if (await copyText(r.uri)) toast('配对链接已复制'); } }, icon('copy'), h('span', { text: '复制' }));
+      let left = r.expires_in || 120;
+      const cd = h('p', { class: 'hint', text: `一次性配对码，${left} 秒后失效（切勿截图发给他人）` });
+      const iv = setInterval(() => {
+        if (!cd.isConnected) { clearInterval(iv); return; }
+        left--;
+        cd.textContent = left > 0 ? `一次性配对码，${left} 秒后失效（切勿截图发给他人）` : '配对码已过期，请关闭后重新生成';
+        if (left <= 0) clearInterval(iv);
+      }, 1000);
+      showSheet('pair', h('div', {},
+        h('h2', { id: 'sheetTitle', text: '扫码配对客户端' }),
+        h('p', { class: 'lead', text: '用手机相机扫下方二维码即可自动打开 App 并登录当前账号；Mac 客户端也可在登录页点击「粘贴配对码」。' }),
+        h('div', { class: 'qr-wrap' }, qr),
+        h('div', { class: 'share-link' }, uriIn, cp),
+        cd,
+        h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '关闭'))));
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  // ---- 空间统计 & 一键个人备份 ----
+  function openAccountStats() {
+    const box = h('div', { class: 'stats', style: 'margin:12px 0' }, h('div', {}, h('dt', { text: '加载中' }), h('dd', { text: '…' })));
+    const dl = h('a', { class: 'btn btn--accent btn--block', href: '/api/account/export', download: '' }, icon('download'), h('span', { text: '下载个人完整备份 ZIP' }));
+    showSheet('stats', h('div', {},
+      h('h2', { id: 'sheetTitle', text: '空间用量与个人备份' }),
+      h('p', { class: 'lead', text: '备份 ZIP 包含你的全部文本（items.json）、全部文件及已加密的密码库信封（vault_encrypted.json）。' }),
+      box, dl,
+      h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '关闭'))));
+    api('/api/account/stats').then((s) => {
+      box.replaceChildren(
+        h('div', {}, h('dt', { text: '有效条目' }), h('dd', { text: `${s.total_items} 条` })),
+        h('div', {}, h('dt', { text: '已用空间' }), h('dd', { text: fmtSize(s.total_bytes) })),
+        h('div', {}, h('dt', { text: '回收站' }), h('dd', { text: `${s.trash_items} 条 · ${fmtSize(s.trash_bytes)}` })),
+        h('div', {}, h('dt', { text: '密码库' }), h('dd', { text: s.vault_exists ? `${s.vault_items} 条` : '未创建' })),
+      );
+    }).catch((e) => { box.replaceChildren(h('p', { class: 'err', text: e.message })); });
+  }
+
   function openAccountMenu() {
     if (!state.user) { openAuth('login'); return; }
     showSheet('account', h('div', {}, h('h2', { id: 'sheetTitle', text: '@' + state.user.username }),
       h('div', { class: 'pick' },
+        h('button', { type: 'button', onclick: () => openVault() }, h('span', { class: 'pk-ico pk-text' }, icon('key')), h('span', {}, h('b', { text: '密码库（E2EE）' }), h('small', { text: '账号密码 · 2FA 验证码 · 端到端加密' }))),
+        h('button', { type: 'button', onclick: () => openPairModal() }, h('span', { class: 'pk-ico pk-file' }, icon('share')), h('span', {}, h('b', { text: '扫码配对客户端' }), h('small', { text: '手机扫码免输地址和密码登录' }))),
         h('button', { type: 'button', onclick: () => { closeSheet(); setScope('private'); } }, h('span', { class: 'pk-ico pk-text' }, icon('lock')), h('span', {}, h('b', { text: '我的私有' }), h('small', { text: `${state.counts.private} 条` }))),
         h('button', { type: 'button', onclick: () => { closeSheet(); setStarred(true); } }, h('span', { class: 'pk-ico pk-file' }, icon('star')), h('span', {}, h('b', { text: '我的收藏' }), h('small', { text: `${state.counts.starred || 0} 条` }))),
-        h('button', { type: 'button', onclick: () => openClipSync() }, h('span', { class: 'pk-ico pk-text' }, icon('copy')), h('span', {}, h('b', { text: '多设备剪贴板同步' }), h('small', { text: '设备列表 · 当前同步内容' }))),
+        h('button', { type: 'button', onclick: () => openTrash() }, h('span', { class: 'pk-ico pk-file' }, icon('trash')), h('span', {}, h('b', { text: '回收站' }), h('small', { text: '7 天内误删内容可恢复' }))),
+        h('button', { type: 'button', onclick: () => openAccountStats() }, h('span', { class: 'pk-ico pk-text' }, icon('download')), h('span', {}, h('b', { text: '空间统计与一键备份' }), h('small', { text: '查看占用 · 导出全部数据 ZIP' }))),
+        h('button', { type: 'button', onclick: () => openClipSync() }, h('span', { class: 'pk-ico pk-text' }, icon('copy')), h('span', {}, h('b', { text: '多设备剪贴板同步' }), h('small', { text: '文本与图片 · 设备列表' }))),
         h('button', { type: 'button', onclick: () => openBarkSettings() }, h('span', { class: 'pk-ico pk-text' }, icon('check')), h('span', {}, h('b', { text: 'Bark 推送' }), h('small', { text: '新私有内容推送到 iPhone' }))),
         h('button', { type: 'button', onclick: () => openClearMenu() }, h('span', { class: 'pk-ico pk-file' }, icon('trash')), h('span', {}, h('b', { text: '清空内容' }), h('small', { text: '只清自己的' }))),
         h('button', { type: 'button', class: 'danger-row', onclick: async () => { await api('/api/logout', { method: 'POST' }); state.user = null; closeSheet(); toast('已退出'); updateChrome(0); setScope('public'); } },
           h('span', { class: 'pk-ico pk-all' }, icon('logout')), h('span', {}, h('b', { text: '退出登录' }), h('small', { text: '回到访客模式' })))),
       themePicker(),
-      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.16` }),
+      h('p', { class: 'hint', style: 'margin:6px 0 10px', text: `服务器版本 ${(state.cfg && state.cfg.version) || '未知（早于 0.1.8）'} · 网页 0.1.17` }),
       h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn', onclick: () => closeSheet() }, '取消'))));
   }
 
@@ -1130,6 +1462,7 @@
     if (act === 'home') { e.preventDefault(); closeSheet(); setQuery(''); setFilter('all'); setTag(''); setStarred(false); setScope('public'); }
     else if (act === 'add-text') { e.preventDefault(); openAdd('text'); }
     else if (act === 'add-file') { e.preventDefault(); openAdd('file'); }
+    else if (act === 'vault') { e.preventDefault(); openVault(); }
     else if (act === 'clear-menu') openClearMenu();
     else if (act === 'theme') cycleTheme();
     else if (act === 'login') openAuth('login');
@@ -1138,6 +1471,7 @@
     else if (act === 'auth-or-clear' || act === 'account') { if (state.user) openAccountMenu(); else openAuth('login'); }
     else if (act === 'close-sheet') closeSheet();
     else if (act === 'star-filter') setStarred(!state.starred);
+    else if (act === 'batch-toggle') toggleBatchMode();
   });
   window.addEventListener('popstate', () => {
     const p = location.pathname;
@@ -1148,18 +1482,21 @@
 
   const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   document.addEventListener('keydown', (e) => {
+    if (document.body.classList.contains('pv-open')) return;
     if (e.key === 'Escape') { if (!sheetRoot.hidden) closeSheet(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
     if (!sheetRoot.hidden) return;
     const k = e.key.toLowerCase();
     if (k === 'n') { e.preventDefault(); openAdd('text'); }
     else if (k === 'u') { e.preventDefault(); openAdd('file'); }
+    else if (k === 'v') { e.preventDefault(); openVault(); }
     else if (k === '/') { e.preventDefault(); $('#q').focus(); }
     else if (k === 't') cycleTheme();
     else if (k === '1') setScope('public'); else if (k === '2') setScope('private'); else if (k === '3') setScope('all');
   });
 
   document.addEventListener('paste', async (e) => {
+    if (document.body.classList.contains('pv-open')) return;
     if (typing(e.target) && !(sheetKind === 'add' && addView)) return;
     if (!state.user) return;
     const cd = e.clipboardData; if (!cd) return;
@@ -1232,6 +1569,7 @@
     if (!$('#starFilter')) {
       const fr = h('div', { class: 'filter-row' },
         h('button', { type: 'button', class: 'star-filter', id: 'starFilter', 'data-act': 'star-filter', hidden: true }, icon('star'), h('span', { text: '收藏' })),
+        h('button', { type: 'button', class: 'star-filter', id: 'batchToggle', 'data-act': 'batch-toggle' }, icon('check'), h('span', { text: '多选' })),
         h('div', { class: 'tags', id: 'tagBar' }));
       const tb = $('.toolbar'); if (tb) tb.append(fr);
     }

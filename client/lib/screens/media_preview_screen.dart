@@ -16,6 +16,7 @@ import '../services/media_cache.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/archive_view.dart';
 import '../widgets/ink.dart';
+import '../widgets/office_view.dart';
 
 /// 详情 / 预览：图片（可缩放）、视频、音频、文本；其它类型提供打开 / 分享。
 class MediaPreviewScreen extends StatefulWidget {
@@ -297,6 +298,8 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
         );
       case MediaKind.archive:
         return ArchiveView(api: widget.api, item: it);
+      case MediaKind.office:
+        return OfficeView(api: widget.api, item: it);
       case MediaKind.pdf:
         final pc = _pdf;
         if (pc == null) return _loading(context);
