@@ -1055,9 +1055,21 @@
         detailPane.append(row);
       }
 
-      addFieldRow('用户名 / 账号', it.username, { mono: true });
-      addFieldRow('密码 / 密钥', it.password, { secret: true, mono: true });
-      if (it.totp) {
+      if (it.kind === 'card') {
+        addFieldRow('持卡人姓名', it.username, { mono: false });
+        addFieldRow('卡号 / 证件号', it.password, { secret: true, mono: true });
+      } else if (it.kind === 'apikey') {
+        addFieldRow('Key ID / 标识', it.username, { mono: true });
+        addFieldRow('API 密钥 / Token', it.password, { secret: true, mono: true });
+        addFieldRow('接口地址', it.url, { link: true });
+      } else if (it.kind === 'note') {
+        // notes displayed as main content
+      } else {
+        addFieldRow('用户名 / 账号', it.username, { mono: true });
+        addFieldRow('密码', it.password, { secret: true, mono: true });
+      }
+
+      if (it.kind !== 'apikey' && it.kind !== 'card' && it.totp) {
         var otp = totpCode(it.totp);
         var row = el('div', 'vt-frow vt-otp-box');
         row.append(el('div', 'vt-flbl', '两步验证码（TOTP）'));
@@ -1073,13 +1085,15 @@
         row.append(line);
         detailPane.append(row);
       }
-      addFieldRow('网址', it.url, { link: true });
+      if (it.kind === 'login' && it.url) {
+        addFieldRow('网址', it.url, { link: true });
+      }
       (it.fields || []).forEach(function (f) {
         addFieldRow(f.label || '自定义字段', f.value, { secret: !!f.secret, mono: !!f.secret });
       });
       if (it.notes) {
         var nrow = el('div', 'vt-frow');
-        nrow.append(el('div', 'vt-flbl', '备注 / 安全笔记'));
+        nrow.append(el('div', 'vt-flbl', it.kind === 'note' ? '笔记内容' : '备注 / 安全笔记'));
         nrow.append(el('pre', 'vt-notes', it.notes));
         detailPane.append(nrow);
       }
@@ -1161,16 +1175,68 @@
     var save = el('button', 'btn btn--accent', '加密保存'); save.type = 'submit';
     var rowBtns = el('div', 'btn-row'); rowBtns.append(cancel, save);
 
+    function updateFormFields() {
+      var k = kindSel.value;
+      if (k === 'note') {
+        fTitle.placeholder = '笔记标题 *（如 服务器备忘）';
+        fUser.hidden = true;
+        pwWrap.hidden = true;
+        fUrl.hidden = true;
+        fTotp.hidden = true;
+        fNotes.hidden = false;
+        fNotes.rows = 8;
+        fNotes.placeholder = '安全笔记内容 *';
+      } else if (k === 'card') {
+        fTitle.placeholder = '卡片名称 *（如 招商银行信用卡、身份证）';
+        fUser.hidden = false;
+        fUser.placeholder = '持卡人姓名';
+        pwWrap.hidden = false;
+        fPass.placeholder = '卡号 / 证件号';
+        fUrl.hidden = true;
+        fTotp.hidden = true;
+        fNotes.hidden = false;
+        fNotes.rows = 3;
+        fNotes.placeholder = '备注（如 发卡行、客服电话等）';
+      } else if (k === 'apikey') {
+        fTitle.placeholder = '名称 *（如 OpenAI、AWS、GitHub Token）';
+        fUser.hidden = false;
+        fUser.placeholder = 'Key ID / Access Key（可选）';
+        pwWrap.hidden = false;
+        fPass.placeholder = 'API 密钥 / Secret Token *';
+        fUrl.hidden = false;
+        fUrl.placeholder = '接口地址 / 服务端点（如 https://api.openai.com）';
+        fTotp.hidden = true;
+        fNotes.hidden = false;
+        fNotes.rows = 3;
+        fNotes.placeholder = '备注说明（如 权限、配额、到期日等）';
+      } else {
+        fTitle.placeholder = '名称（如 GitHub、Google）';
+        fUser.hidden = false;
+        fUser.placeholder = '用户名 / 邮箱 / 手机号';
+        pwWrap.hidden = false;
+        fPass.placeholder = '密码';
+        fUrl.hidden = false;
+        fUrl.placeholder = '网址（如 https://github.com）';
+        fTotp.hidden = false;
+        fTotp.placeholder = 'TOTP 密钥或 otpauth://totp/...（可选）';
+        fNotes.hidden = false;
+        fNotes.rows = 4;
+        fNotes.placeholder = '备注 / 恢复码 / 安全笔记';
+      }
+    }
+    kindSel.onchange = updateFormFields;
+    updateFormFields();
+
     form.append(kindSel, fTitle, fUser, pwWrap, fUrl, fTotp, fTags, fNotes, fieldsBox, addFieldBtn, rowBtns);
     form.onsubmit = async function (e) {
       e.preventDefault();
       var now = Math.floor(Date.now() / 1000);
       cur.kind = kindSel.value;
       cur.title = fTitle.value.trim() || '未命名';
-      cur.username = fUser.value.trim();
-      cur.password = fPass.value;
-      cur.url = fUrl.value.trim();
-      cur.totp = fTotp.value.trim();
+      cur.username = cur.kind === 'note' ? '' : fUser.value.trim();
+      cur.password = cur.kind === 'note' ? '' : fPass.value;
+      cur.url = (cur.kind === 'login' || cur.kind === 'apikey') ? fUrl.value.trim() : '';
+      cur.totp = (cur.kind === 'login') ? fTotp.value.trim() : '';
       cur.tags = fTags.value.split(/[,，;]/).map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 8);
       cur.notes = fNotes.value;
       cur.fields = (cur.fields || []).filter(function (f) { return (f.label || f.value); });

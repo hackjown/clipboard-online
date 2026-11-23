@@ -976,7 +976,7 @@
 
     const pwInput = h('input', { type: 'text', class: 'vt-in', placeholder: '可选提取码（留空=免密）', maxlength: '32' });
     const mvSel = h('select', { class: 'vt-in' },
-      ...[ [0, '访问次数：不限'], [1, '🔥 1 次（阅后即焚）'], [3, '限 3 次'], [5, '限 5 次'], [10, '限 10 次'] ]
+      ...[ [0, '访问次数：不限'], [1, '🔥 1 次（阅后即焚）'], [3, '限 3 次'], [10, '限 10 次'] ]
         .map(([v, t]) => h('option', { value: String(v), selected: v === maxViews ? 'selected' : false, text: t })));
     const regenBtn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
       regenBtn.disabled = true;

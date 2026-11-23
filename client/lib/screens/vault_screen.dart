@@ -408,6 +408,11 @@ class _VaultScreenState extends State<VaultScreen> {
     final tagsCtrl = TextEditingController(text: (existing?.tags ?? const []).join(', '));
     final notesCtrl = TextEditingController(text: existing?.notes ?? '');
 
+    String findField(String label) =>
+        existing?.fields.where((f) => f.label == label).map((f) => f.value).firstOrNull ?? '';
+    final cardExpiryCtrl = TextEditingController(text: findField('有效期'));
+    final cardCvvCtrl = TextEditingController(text: findField('CVV / 安全码'));
+
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -431,29 +436,79 @@ class _VaultScreenState extends State<VaultScreen> {
                 onSelectionChanged: (s) => setM(() => kind = s.first),
               ),
               const SizedBox(height: 10),
-              TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '名称 *', border: OutlineInputBorder())),
-              const SizedBox(height: 8),
-              TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '用户名 / 账号', border: OutlineInputBorder())),
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(
-                  child: TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '密码 / 密钥', border: OutlineInputBorder())),
-                ),
-                const SizedBox(width: 8),
-                InkButton(
-                  label: '生成',
-                  dense: true,
-                  onPressed: () => passCtrl.text = VaultCrypto.genPassword(length: 20),
-                ),
-              ]),
-              const SizedBox(height: 8),
-              TextField(controller: urlCtrl, decoration: const InputDecoration(labelText: '网址', border: OutlineInputBorder())),
-              const SizedBox(height: 8),
-              TextField(controller: totpCtrl, decoration: const InputDecoration(labelText: 'TOTP 密钥或 otpauth://', border: OutlineInputBorder())),
-              const SizedBox(height: 8),
-              TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
-              const SizedBox(height: 8),
-              TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注 / 安全笔记', border: OutlineInputBorder())),
+              if (kind == 'login') ...[
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '名称 *（如 GitHub、Google）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '用户名 / 邮箱 / 账号', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  InkButton(
+                    label: '生成',
+                    dense: true,
+                    onPressed: () => passCtrl.text = VaultCrypto.genPassword(length: 20),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                TextField(controller: urlCtrl, decoration: const InputDecoration(labelText: '登录网址（如 https://github.com）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: totpCtrl, decoration: const InputDecoration(labelText: 'TOTP 密钥或 otpauth://（可选）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注 / 安全笔记', border: OutlineInputBorder())),
+              ] else if (kind == 'note') ...[
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '笔记标题 *（如 服务器备忘）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: notesCtrl, minLines: 6, maxLines: 12, decoration: const InputDecoration(labelText: '安全笔记内容 *', alignLabelWithHint: true, border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
+              ] else if (kind == 'card') ...[
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '卡片名称 *（如 招商银行信用卡、身份证）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '持卡人姓名', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '卡号 / 证件号', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: cardExpiryCtrl, decoration: const InputDecoration(labelText: '有效期（如 08/28）', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(controller: cardCvvCtrl, decoration: const InputDecoration(labelText: 'CVV / 安全码 / PIN', border: OutlineInputBorder())),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注（如 发卡行、客服电话等）', border: OutlineInputBorder())),
+              ] else if (kind == 'apikey') ...[
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '名称 *（如 OpenAI、AWS、GitHub Token）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: userCtrl, decoration: const InputDecoration(labelText: 'Key ID / Access Key（可选）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: passCtrl, decoration: const InputDecoration(labelText: 'API 密钥 / Secret Token *', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  InkButton(
+                    label: '生成',
+                    dense: true,
+                    onPressed: () => passCtrl.text = VaultCrypto.genPassword(length: 32, symbols: false),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                TextField(controller: urlCtrl, decoration: const InputDecoration(labelText: '接口地址 / 服务端点（如 https://api.openai.com）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注说明（如 权限、配额、到期日等）', border: OutlineInputBorder())),
+              ],
               const SizedBox(height: 14),
               Row(children: [
                 Expanded(child: InkButton(label: '取消', onPressed: () => Navigator.pop(ctx, false))),
@@ -480,17 +535,35 @@ class _VaultScreenState extends State<VaultScreen> {
           .where((e) => e.isNotEmpty)
           .take(8)
           .toList();
+
+      final customFields = (existing?.fields ?? const [])
+          .where((f) => f.label != '有效期' && f.label != 'CVV / 安全码')
+          .toList();
+      if (kind == 'card') {
+        final exp = cardExpiryCtrl.text.trim();
+        final cvv = cardCvvCtrl.text.trim();
+        if (exp.isNotEmpty) customFields.add(VaultField(label: '有效期', value: exp, secret: false));
+        if (cvv.isNotEmpty) customFields.add(VaultField(label: 'CVV / 安全码', value: cvv, secret: true));
+      }
+
+      final itemTitle = titleCtrl.text.trim().isEmpty ? '未命名' : titleCtrl.text.trim();
+      final itemUser = (kind == 'note') ? '' : userCtrl.text.trim();
+      final itemPass = (kind == 'note') ? '' : passCtrl.text;
+      final itemUrl = (kind == 'login' || kind == 'apikey') ? urlCtrl.text.trim() : '';
+      final itemTotp = (kind == 'login') ? totpCtrl.text.trim() : '';
+
       if (isNew) {
         _data!.items.insert(
           0,
           VaultItem(
             id: VaultCrypto.randomId(),
             kind: kind,
-            title: titleCtrl.text.trim().isEmpty ? '未命名' : titleCtrl.text.trim(),
-            username: userCtrl.text.trim(),
-            password: passCtrl.text,
-            url: urlCtrl.text.trim(),
-            totp: totpCtrl.text.trim(),
+            title: itemTitle,
+            username: itemUser,
+            password: itemPass,
+            url: itemUrl,
+            totp: itemTotp,
+            fields: customFields,
             tags: tags,
             notes: notesCtrl.text,
             createdAt: now,
@@ -500,11 +573,12 @@ class _VaultScreenState extends State<VaultScreen> {
       } else {
         existing
           ..kind = kind
-          ..title = titleCtrl.text.trim().isEmpty ? '未命名' : titleCtrl.text.trim()
-          ..username = userCtrl.text.trim()
-          ..password = passCtrl.text
-          ..url = urlCtrl.text.trim()
-          ..totp = totpCtrl.text.trim()
+          ..title = itemTitle
+          ..username = itemUser
+          ..password = itemPass
+          ..url = itemUrl
+          ..totp = itemTotp
+          ..fields = customFields
           ..tags = tags
           ..notes = notesCtrl.text
           ..updatedAt = now;
@@ -522,6 +596,8 @@ class _VaultScreenState extends State<VaultScreen> {
     totpCtrl.dispose();
     tagsCtrl.dispose();
     notesCtrl.dispose();
+    cardExpiryCtrl.dispose();
+    cardCvvCtrl.dispose();
   }
 
   Future<void> _showDetail(VaultItem it) async {
@@ -573,54 +649,86 @@ class _VaultScreenState extends State<VaultScreen> {
                   ),
                 ]),
                 const SizedBox(height: 10),
-                if (it.username.isNotEmpty) _detailRow(ctx, '用户名 / 账号', it.username, onCopy: () => _copyField(it.username, '账号')),
-                if (it.password.isNotEmpty)
-                  _detailRow(
-                    ctx,
-                    '密码 / 密钥',
-                    showPw ? it.password : '••••••••••••',
-                    trailing: TextButton(onPressed: () => setM(() => showPw = !showPw), child: Text(showPw ? '隐藏' : '显示')),
-                    onCopy: () => _copyField(it.password, '密码', secret: true),
-                  ),
-                if (otp != null)
-                  _detailRow(
-                    ctx,
-                    '两步验证码（剩余 ${otp.remaining}s）',
-                    otp.formatted,
-                    highlight: true,
-                    onCopy: () => _copyField(otp.code, '验证码', secret: true),
-                  ),
-                if (it.url.isNotEmpty)
-                  _detailRow(
-                    ctx,
-                    '网址',
-                    it.url,
-                    trailing: TextButton(
-                      onPressed: () {
-                        final u = Uri.tryParse(it.url.startsWith('http') ? it.url : 'https://${it.url}');
-                        if (u != null) launchUrl(u, mode: LaunchMode.externalApplication);
-                      },
-                      child: const Text('打开'),
+                if (it.kind == 'note') ...[
+                  if (it.notes.isNotEmpty) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('笔记内容', style: t.monoStyle(12, color: t.muted)),
+                        TextButton(
+                          onPressed: () => _copyField(it.notes, '笔记内容'),
+                          child: const Text('复制全部'),
+                        ),
+                      ],
                     ),
-                    onCopy: () => _copyField(it.url, '网址'),
-                  ),
-                for (final f in it.fields)
-                  _detailRow(
-                    ctx,
-                    f.label.isEmpty ? '自定义字段' : f.label,
-                    f.secret ? '••••••••' : f.value,
-                    onCopy: () => _copyField(f.value, f.label.isEmpty ? '字段' : f.label, secret: f.secret),
-                  ),
-                if (it.notes.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text('备注', style: t.monoStyle(11.5, color: t.muted)),
-                  const SizedBox(height: 4),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: t.paper2, borderRadius: BorderRadius.circular(10)),
-                    child: SelectableText(it.notes, style: t.monoStyle(13)),
-                  ),
+                    const SizedBox(height: 4),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: t.paper2,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: t.line.withValues(alpha: 0.3)),
+                      ),
+                      child: SelectableText(it.notes, style: const TextStyle(fontSize: 14.5, height: 1.55)),
+                    ),
+                  ],
+                ] else ...[
+                  if (it.username.isNotEmpty)
+                    _detailRow(
+                      ctx,
+                      it.kind == 'card' ? '持卡人姓名' : (it.kind == 'apikey' ? 'Key ID / 标识' : '用户名 / 账号'),
+                      it.username,
+                      onCopy: () => _copyField(it.username, it.kind == 'card' ? '持卡人' : '账号'),
+                    ),
+                  if (it.password.isNotEmpty)
+                    _detailRow(
+                      ctx,
+                      it.kind == 'card' ? '卡号 / 证件号' : (it.kind == 'apikey' ? 'API 密钥 / Secret' : '密码'),
+                      showPw ? it.password : '••••••••••••',
+                      trailing: TextButton(onPressed: () => setM(() => showPw = !showPw), child: Text(showPw ? '隐藏' : '显示')),
+                      onCopy: () => _copyField(it.password, it.kind == 'card' ? '卡号' : '密码', secret: true),
+                    ),
+                  if (otp != null)
+                    _detailRow(
+                      ctx,
+                      '两步验证码（剩余 ${otp.remaining}s）',
+                      otp.formatted,
+                      highlight: true,
+                      onCopy: () => _copyField(otp.code, '验证码', secret: true),
+                    ),
+                  if (it.url.isNotEmpty)
+                    _detailRow(
+                      ctx,
+                      it.kind == 'apikey' ? '接口地址' : '网址',
+                      it.url,
+                      trailing: TextButton(
+                        onPressed: () {
+                          final u = Uri.tryParse(it.url.startsWith('http') ? it.url : 'https://${it.url}');
+                          if (u != null) launchUrl(u, mode: LaunchMode.externalApplication);
+                        },
+                        child: const Text('打开'),
+                      ),
+                      onCopy: () => _copyField(it.url, it.kind == 'apikey' ? '接口地址' : '网址'),
+                    ),
+                  for (final f in it.fields)
+                    _detailRow(
+                      ctx,
+                      f.label.isEmpty ? '自定义字段' : f.label,
+                      f.secret ? '••••••••' : f.value,
+                      onCopy: () => _copyField(f.value, f.label.isEmpty ? '字段' : f.label, secret: f.secret),
+                    ),
+                  if (it.notes.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text('备注', style: t.monoStyle(11.5, color: t.muted)),
+                    const SizedBox(height: 4),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: t.paper2, borderRadius: BorderRadius.circular(10)),
+                      child: SelectableText(it.notes, style: t.monoStyle(13)),
+                    ),
+                  ],
                 ],
               ]),
             ),
@@ -866,9 +974,17 @@ class _VaultScreenState extends State<VaultScreen> {
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text('${it.favorite ? '★ ' : ''}${it.title}',
                               maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
-                          if (it.username.isNotEmpty || it.url.isNotEmpty)
-                            Text(it.username.isNotEmpty ? it.username : it.url,
-                                maxLines: 1, overflow: TextOverflow.ellipsis, style: t.monoStyle(12, color: t.muted)),
+                          Builder(builder: (_) {
+                            final subtitle = switch (it.kind) {
+                              'note' => it.notes.replaceAll(RegExp(r'\s+'), ' ').trim(),
+                              'card' => it.username.isNotEmpty ? it.username : (it.password.isNotEmpty ? '••••••••' : ''),
+                              'apikey' => it.username.isNotEmpty ? it.username : (it.url.isNotEmpty ? it.url : 'API 密钥'),
+                              _ => it.username.isNotEmpty ? it.username : it.url,
+                            };
+                            return subtitle.isNotEmpty
+                                ? Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.monoStyle(12, color: t.muted))
+                                : const SizedBox.shrink();
+                          }),
                         ]),
                       ),
                       if (otp != null)

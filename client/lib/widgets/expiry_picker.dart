@@ -27,14 +27,26 @@ class ExpiryPicker extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       if (label.isNotEmpty) Text(label, style: Theme.of(context).textTheme.bodySmall),
       const SizedBox(height: 4),
-      Wrap(spacing: 8, runSpacing: 6, children: [
-        for (final e in kExpiryOptions)
-          ChoiceChip(
-            label: Text(e.$2),
-            selected: value == e.$1,
-            onSelected: (_) => onChanged(e.$1),
-          ),
-      ]),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < kExpiryOptions.length; i++) ...[
+              if (i > 0) const SizedBox(width: 6),
+              ChoiceChip(
+                showCheckmark: false,
+                visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+                label: Text(kExpiryOptions[i].$2),
+                selected: value == kExpiryOptions[i].$1,
+                onSelected: (_) => onChanged(kExpiryOptions[i].$1),
+              ),
+            ],
+          ],
+        ),
+      ),
     ]);
   }
 }

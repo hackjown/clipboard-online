@@ -119,7 +119,7 @@ class _ShareBodyState extends State<_ShareBody> {
               ),
               const SizedBox(height: 8),
               Wrap(spacing: 6, children: [
-                for (final (v, lbl) in const [(0, '不限次数'), (1, '🔥 阅后即焚'), (3, '限 3 次'), (5, '限 5 次')])
+                for (final (v, lbl) in const [(0, '不限次数'), (1, '🔥 阅后即焚'), (3, '限 3 次')])
                   ChoiceChip(
                     label: Text(lbl),
                     selected: _maxViews == v,
