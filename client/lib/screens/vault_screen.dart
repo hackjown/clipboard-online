@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/api.dart';
 import '../services/clip_sync.dart';
 import '../services/clipboard_watch.dart';
+import '../services/vault_biometric.dart';
 import '../services/vault_crypto.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
@@ -46,6 +47,12 @@ class _VaultScreenState extends State<VaultScreen> {
   Timer? _clipClearTimer;
   String? _lastSecret;
 
+  bool _bioSupported = false;
+  bool _bioEnabled = false;
+  String _bioLabel = 'Face ID';
+  bool _rememberBio = true;
+  String? _unlockedPassword;
+
   final _pw1Ctrl = TextEditingController();
   final _pw2Ctrl = TextEditingController();
   final _searchCtrl = TextEditingController();
@@ -54,6 +61,24 @@ class _VaultScreenState extends State<VaultScreen> {
   void initState() {
     super.initState();
     _fetchEnvelope();
+    _initBiometrics();
+  }
+
+  Future<void> _initBiometrics() async {
+    final supported = await VaultBiometric.instance.isSupported();
+    if (!supported) return;
+    final enabled = await VaultBiometric.instance.isEnabled();
+    final label = await VaultBiometric.instance.biometricLabel();
+    if (!mounted) return;
+    setState(() {
+      _bioSupported = true;
+      _bioEnabled = enabled;
+      _bioLabel = label;
+      _rememberBio = enabled;
+    });
+    if (enabled && _envelope != null && _keyBytes == null) {
+      _unlockWithBiometric();
+    }
   }
 
   @override
@@ -77,6 +102,7 @@ class _VaultScreenState extends State<VaultScreen> {
     }
     _keyBytes = null;
     _data = null;
+    _unlockedPassword = null;
   }
 
   void _resetAutoLock() {
@@ -92,6 +118,7 @@ class _VaultScreenState extends State<VaultScreen> {
     _totpTimer?.cancel();
     _lockTimer?.cancel();
     _wipeMemory();
+    _unlockedPassword = null;
     _pw1Ctrl.clear();
     _pw2Ctrl.clear();
     if (mounted) {
@@ -113,6 +140,9 @@ class _VaultScreenState extends State<VaultScreen> {
         _rev = env?.rev ?? 0;
         _loading = false;
       });
+      if (_bioEnabled && env != null && _keyBytes == null) {
+        _unlockWithBiometric();
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -174,6 +204,11 @@ class _VaultScreenState extends State<VaultScreen> {
       _rev = 0;
       _data = VaultPayload(items: []);
       if (await _saveToServer()) {
+        _unlockedPassword = p1;
+        if (_bioSupported && _rememberBio) {
+          await VaultBiometric.instance.enableWithPassword(p1);
+          if (mounted) setState(() => _bioEnabled = true);
+        }
         _pw1Ctrl.clear();
         _pw2Ctrl.clear();
         _startTotpTimer();
@@ -189,12 +224,30 @@ class _VaultScreenState extends State<VaultScreen> {
     }
   }
 
+  Future<void> _unlockWithBiometric() async {
+    if (_busy || _keyBytes != null) return;
+    final savedPw = await VaultBiometric.instance.getSavedPassword();
+    if (savedPw == null || savedPw.isEmpty) {
+      if (mounted) setState(() => _bioEnabled = false);
+      return;
+    }
+    final authenticated = await VaultBiometric.instance.authenticate(
+      reason: '使用 $_bioLabel 解锁密码保险箱',
+    );
+    if (!authenticated || !mounted) return;
+    await _unlockWithPassword(savedPw, fromBiometric: true);
+  }
+
   Future<void> _unlockVault() async {
     final pw = _pw1Ctrl.text;
     if (pw.isEmpty) {
       _toast('请输入主密码');
       return;
     }
+    await _unlockWithPassword(pw);
+  }
+
+  Future<void> _unlockWithPassword(String pw, {bool fromBiometric = false}) async {
     setState(() => _busy = true);
     try {
       final latest = await widget.api.getVault();
@@ -219,12 +272,22 @@ class _VaultScreenState extends State<VaultScreen> {
       _saltBytes = salt;
       _iterations = latest.iterations;
       _data = payload;
+      _unlockedPassword = pw;
       _pw1Ctrl.clear();
       _resetAutoLock();
       _startTotpTimer();
+
+      if (!fromBiometric && _bioSupported && _rememberBio) {
+        await VaultBiometric.instance.enableWithPassword(pw);
+        if (mounted) setState(() => _bioEnabled = true);
+      }
     } catch (e) {
       _wipeMemory();
-      _toast(e is FormatException ? e.message : '解锁失败：$e');
+      if (fromBiometric) {
+        _toast('$_bioLabel 解锁失败，密码可能已更新，请输入主密码');
+      } else {
+        _toast(e is FormatException ? e.message : '解锁失败：$e');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -329,6 +392,83 @@ class _VaultScreenState extends State<VaultScreen> {
     } catch (e) {
       _toast('导入失败：$e');
     }
+  }
+
+  Future<void> _openBiometricDialog() async {
+    _resetAutoLock();
+    final ctrl = TextEditingController();
+    var enabled = _bioEnabled;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text('$_bioLabel 解锁设置'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('开启 $_bioLabel 解锁'),
+                subtitle: Text(
+                  enabled ? '打开密码保险箱时自动使用 $_bioLabel 解锁' : '未开启，每次打开需手动输入主密码',
+                  style: TextStyle(fontSize: 12.5, color: ctx.ink.muted),
+                ),
+                value: enabled,
+                onChanged: (val) async {
+                  if (val) {
+                    final pw = _unlockedPassword ?? ctrl.text;
+                    if (pw.isNotEmpty) {
+                      await VaultBiometric.instance.enableWithPassword(pw);
+                      setD(() => enabled = true);
+                      if (mounted) setState(() => _bioEnabled = true);
+                      _toast('已开启 $_bioLabel 解锁');
+                    } else {
+                      setD(() => enabled = true);
+                    }
+                  } else {
+                    await VaultBiometric.instance.disable();
+                    setD(() => enabled = false);
+                    if (mounted) setState(() => _bioEnabled = false);
+                    _toast('已关闭 $_bioLabel 解锁');
+                  }
+                },
+              ),
+              if (enabled && _unlockedPassword == null) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '输入主密码以保存到安全存储',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: () async {
+                    final pw = ctrl.text;
+                    if (pw.isEmpty) {
+                      _toast('请输入主密码');
+                      return;
+                    }
+                    await VaultBiometric.instance.enableWithPassword(pw);
+                    if (mounted) setState(() => _bioEnabled = true);
+                    _toast('已开启 $_bioLabel 解锁');
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('确认保存'),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
   }
 
   Future<void> _openGeneratorDialog() async {
@@ -842,6 +982,15 @@ class _VaultScreenState extends State<VaultScreen> {
         title: const Text('密码保险箱（E2EE）'),
         actions: unlocked
             ? [
+                if (_bioSupported)
+                  InkIconButton(
+                    plain: true,
+                    size: 40,
+                    tooltip: '$_bioLabel 设置（${_bioEnabled ? "已开启" : "未开启"}）',
+                    icon: _bioEnabled ? Icons.face : Icons.face_unlock_outlined,
+                    color: _bioEnabled ? context.ink.accent : null,
+                    onPressed: _openBiometricDialog,
+                  ),
                 InkIconButton(plain: true, size: 40, tooltip: '生成密码', icon: Icons.password_rounded, onPressed: _openGeneratorDialog),
                 InkIconButton(plain: true, size: 40, tooltip: '导入 CSV', icon: Icons.file_upload_outlined, onPressed: _importCsv),
                 InkIconButton(plain: true, size: 40, tooltip: '锁定', icon: Icons.lock_outline, onPressed: () => _lockVault()),
@@ -889,6 +1038,16 @@ class _VaultScreenState extends State<VaultScreen> {
               TextField(controller: _pw1Ctrl, obscureText: true, decoration: const InputDecoration(labelText: '设置主密码（至少 8 位）', border: OutlineInputBorder())),
               const SizedBox(height: 10),
               TextField(controller: _pw2Ctrl, obscureText: true, decoration: const InputDecoration(labelText: '再次输入主密码', border: OutlineInputBorder())),
+              if (_bioSupported) ...[
+                const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text('开启 $_bioLabel 解锁', style: const TextStyle(fontSize: 14)),
+                  value: _rememberBio,
+                  onChanged: (v) => setState(() => _rememberBio = v ?? false),
+                ),
+              ],
               const SizedBox(height: 16),
               InkButton(label: _busy ? '正在派生密钥…' : '创建并解锁', variant: InkVariant.accent, busy: _busy, onPressed: _busy ? null : _createVault),
             ]),
@@ -909,18 +1068,72 @@ class _VaultScreenState extends State<VaultScreen> {
             margin: EdgeInsets.zero,
             padding: const EdgeInsets.all(22),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Text('解锁密码保险箱', style: TextStyle(fontFamilyFallback: InkTokens.serif, fontSize: 22, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 6),
-              Text('共 ${_envelope?.itemCount ?? 0} 条加密记录 · 仅在本地解密', style: t.monoStyle(12.5, color: t.muted)),
-              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('解锁密码保险箱', style: TextStyle(fontFamilyFallback: InkTokens.serif, fontSize: 22, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 6),
+                        Text('共 ${_envelope?.itemCount ?? 0} 条加密记录 · 仅在本地解密', style: t.monoStyle(12.5, color: t.muted)),
+                      ],
+                    ),
+                  ),
+                  if (_bioSupported && _bioEnabled)
+                    InkIconButton(
+                      icon: Icons.face_unlock_outlined,
+                      tooltip: '使用 $_bioLabel 解锁',
+                      size: 44,
+                      onPressed: _busy ? null : _unlockWithBiometric,
+                    ),
+                ],
+              ),
+              if (_bioSupported && _bioEnabled) ...[
+                const SizedBox(height: 16),
+                InkButton(
+                  label: _busy ? '正在解密…' : '使用 $_bioLabel 解锁',
+                  icon: Icons.face_unlock_outlined,
+                  variant: InkVariant.accent,
+                  busy: _busy,
+                  onPressed: _busy ? null : _unlockWithBiometric,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(child: Divider(color: t.line.withValues(alpha: 0.3))),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Text('或输入主密码', style: TextStyle(fontSize: 12.5, color: t.muted)),
+                    ),
+                    Expanded(child: Divider(color: t.line.withValues(alpha: 0.3))),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 14),
               TextField(
                 controller: _pw1Ctrl,
                 obscureText: true,
                 onSubmitted: (_) => _busy ? null : _unlockVault(),
                 decoration: const InputDecoration(labelText: '输入主密码', border: OutlineInputBorder()),
               ),
+              if (_bioSupported && !_bioEnabled) ...[
+                const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text('记住密码并开启 $_bioLabel 解锁', style: const TextStyle(fontSize: 13.5)),
+                  value: _rememberBio,
+                  onChanged: (v) => setState(() => _rememberBio = v ?? false),
+                ),
+              ],
               const SizedBox(height: 14),
-              InkButton(label: _busy ? '正在解密…' : '解锁', variant: InkVariant.accent, busy: _busy, onPressed: _busy ? null : _unlockVault),
+              InkButton(
+                label: _busy ? '正在解密…' : '主密码解锁',
+                variant: _bioSupported && _bioEnabled ? InkVariant.normal : InkVariant.accent,
+                busy: _busy,
+                onPressed: _busy ? null : _unlockVault,
+              ),
               const SizedBox(height: 8),
               TextButton(onPressed: _busy ? null : _resetVaultDialog, child: Text('忘记主密码？重置密码库', style: TextStyle(color: t.muted))),
             ]),

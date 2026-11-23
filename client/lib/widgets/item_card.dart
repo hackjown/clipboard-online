@@ -80,40 +80,23 @@ class ItemCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 头部：类型胶囊 + 可见性 + 过期 + 元信息（左侧） + 删除（右侧上面那一排，不换行）
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // 头部：类型胶囊 + 可见性 + 过期 + 元信息（等宽）
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    InkChip(item.isText ? '文本' : '文件', color: item.isText ? t.lime : t.sky),
-                    InkChip(item.isPublic ? '公共' : '私有', color: item.isPublic ? t.sun : t.pink),
-                    if (exp != null) InkChip(exp, color: t.pink),
-                    Text(
-                      [
-                        _time(item.created),
-                        if (item.ownerUsername != null) '@${item.ownerUsername}',
-                        if (item.isFile) _size(item.size),
-                      ].join('  ·  '),
-                      style: t.monoStyle(12, color: t.muted).copyWith(height: 1.2),
-                    ),
-                  ],
-                ),
+              InkChip(item.isText ? '文本' : '文件', color: item.isText ? t.lime : t.sky),
+              InkChip(item.isPublic ? '公共' : '私有', color: item.isPublic ? t.sun : t.pink),
+              if (exp != null) InkChip(exp, color: t.pink),
+              Text(
+                [
+                  _time(item.created),
+                  if (item.ownerUsername != null) '@${item.ownerUsername}',
+                  if (item.isFile) _size(item.size),
+                ].join('  ·  '),
+                style: t.monoStyle(12, color: t.muted).copyWith(height: 1.2),
               ),
-              if (onDelete != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: InkIconButton(
-                    icon: Icons.delete_outline,
-                    color: t.danger,
-                    tooltip: '删除',
-                    onPressed: onDelete,
-                  ),
-                ),
             ],
           ),
           const SizedBox(height: 10),
@@ -236,58 +219,73 @@ class ItemCard extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
+          // 主操作按钮：预览/复制/解密、备注/编辑、访达
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (item.isText && !item.encrypted)
+                InkButton(label: '复制', icon: Icons.copy_rounded, onPressed: onCopy)
+              else if (item.isText && item.encrypted)
+                InkButton(label: '解密', icon: Icons.vpn_key_outlined, variant: InkVariant.accent, onPressed: onOpen)
+              else
+                InkButton(label: '预览', icon: Icons.visibility_outlined, onPressed: onOpen),
+              if (onEdit != null && item.mine && (!item.isText || !item.encrypted))
+                InkButton(label: item.isFile ? '备注/改名' : '编辑', icon: Icons.edit_outlined, onPressed: onEdit),
+              if (onReveal != null)
+                InkButton(label: '在访达中显示', icon: Icons.folder_open, onPressed: onReveal),
+            ],
+          ),
+          if (onSystemShare != null ||
+              onShareLink != null ||
+              onFavorite != null ||
+              (onPin != null && item.mine) ||
+              onDelete != null) ...[
+            const SizedBox(height: 8),
+            // 快捷操作栏：分享、二维码、收藏、置顶、删除（删除紧邻置顶，整行不折行）
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                if (item.isText && !item.encrypted)
-                  InkButton(label: '复制', icon: Icons.copy_rounded, onPressed: onCopy)
-                else if (item.isText && item.encrypted)
-                  InkButton(label: '解密', icon: Icons.vpn_key_outlined, variant: InkVariant.accent, onPressed: onOpen)
-                else
-                  InkButton(label: '预览', icon: Icons.visibility_outlined, onPressed: onOpen),
-                if (onEdit != null && item.mine && (!item.isText || !item.encrypted)) ...[
-                  const SizedBox(width: 8),
-                  InkButton(label: item.isFile ? '备注/改名' : '编辑', icon: Icons.edit_outlined, onPressed: onEdit),
-                ],
-                if (onSystemShare != null) ...[
-                  const SizedBox(width: 8),
+                if (onSystemShare != null)
                   InkButton(label: '分享', icon: Icons.ios_share, variant: InkVariant.ink, onPressed: onSystemShare),
-                ],
-                if (onReveal != null) ...[
-                  const SizedBox(width: 8),
-                  InkButton(label: '在访达中显示', icon: Icons.folder_open, onPressed: onReveal),
-                ],
-                if (onShareLink != null) ...[
-                  const SizedBox(width: 8),
+                if (onShareLink != null)
                   InkIconButton(
                     icon: Icons.qr_code_2,
                     color: _act(t.dark, 'share', item.hasShare),
                     tooltip: item.hasShare ? '链接 / 二维码（已开启分享）' : '链接 / 二维码',
                     onPressed: onShareLink,
+                    size: 42,
                   ),
-                ],
-                if (onFavorite != null) ...[
-                  const SizedBox(width: 8),
+                if (onFavorite != null)
                   InkIconButton(
                     icon: item.favorite ? Icons.star_rounded : Icons.star_border_rounded,
                     color: _act(t.dark, 'star', item.favorite),
                     tooltip: '收藏',
                     onPressed: onFavorite,
+                    size: 42,
                   ),
-                ],
-                if (onPin != null && item.mine) ...[
-                  const SizedBox(width: 8),
+                if (onPin != null && item.mine)
                   InkIconButton(
                     icon: item.pinned ? Icons.push_pin : Icons.push_pin_outlined,
                     color: _act(t.dark, 'pin', item.pinned),
                     tooltip: '置顶',
                     onPressed: onPin,
+                    size: 42,
                   ),
-                ],
+                if (onDelete != null)
+                  InkIconButton(
+                    icon: Icons.delete_outline,
+                    color: t.danger,
+                    tooltip: '删除',
+                    onPressed: onDelete,
+                    size: 42,
+                  ),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );
