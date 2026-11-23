@@ -277,7 +277,7 @@
     card.append(el('h2', null, isNew ? '新建加密条目' : '查看 / 编辑条目'));
 
     var kindSel = el('select', 'in');
-    [['login', '🔑 登录账号'], ['note', '📝 安全笔记'], ['card', '💳 卡片/证件'], ['apikey', '⚡ API 密钥']].forEach(function (p) {
+    [['login', '🔑 登录账号'], ['note', '📝 安全笔记'], ['card', '💳 银行卡片'], ['idcard', '🪪 证件资料'], ['apikey', '⚡ API 密钥']].forEach(function (p) {
       var o = document.createElement('option'); o.value = p[0]; o.textContent = p[1];
       if (cur.kind === p[0]) o.selected = true;
       kindSel.append(o);
@@ -303,11 +303,17 @@
         uIn.hidden = true; pRow.hidden = true; urlIn.hidden = true; otpIn.hidden = true;
         nIn.hidden = false; nIn.rows = 8; nIn.placeholder = '安全笔记内容 *';
       } else if (k === 'card') {
-        tIn.placeholder = '卡片名称 *（如 招行信用卡、身份证）';
+        tIn.placeholder = '卡片名称 *（如 招行信用卡）';
         uIn.hidden = false; uIn.placeholder = '持卡人姓名';
-        pRow.hidden = false; pIn.placeholder = '卡号 / 证件号';
+        pRow.hidden = false; pIn.placeholder = '卡号';
         urlIn.hidden = true; otpIn.hidden = true;
         nIn.hidden = false; nIn.rows = 3; nIn.placeholder = '备注（如 发卡行、客服电话等）';
+      } else if (k === 'idcard') {
+        tIn.placeholder = '证件名称 *（如 居民身份证、护照）';
+        uIn.hidden = false; uIn.placeholder = '姓名 / 持有人';
+        pRow.hidden = false; pIn.placeholder = '证件号码 *';
+        urlIn.hidden = true; otpIn.hidden = true;
+        nIn.hidden = false; nIn.rows = 3; nIn.placeholder = '备注说明';
       } else if (k === 'apikey') {
         tIn.placeholder = '名称 *（如 OpenAI、AWS Token）';
         uIn.hidden = false; uIn.placeholder = 'Key ID / Access Key（可选）';

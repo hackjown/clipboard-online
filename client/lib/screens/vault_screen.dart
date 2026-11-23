@@ -412,6 +412,8 @@ class _VaultScreenState extends State<VaultScreen> {
         existing?.fields.where((f) => f.label == label).map((f) => f.value).firstOrNull ?? '';
     final cardExpiryCtrl = TextEditingController(text: findField('有效期'));
     final cardCvvCtrl = TextEditingController(text: findField('CVV / 安全码'));
+    final idExpiryCtrl = TextEditingController(text: findField('有效期至'));
+    final idIssuerCtrl = TextEditingController(text: findField('签发机关'));
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
@@ -430,6 +432,7 @@ class _VaultScreenState extends State<VaultScreen> {
                   ButtonSegment(value: 'login', label: Text('登录')),
                   ButtonSegment(value: 'note', label: Text('笔记')),
                   ButtonSegment(value: 'card', label: Text('卡片')),
+                  ButtonSegment(value: 'idcard', label: Text('证件')),
                   ButtonSegment(value: 'apikey', label: Text('密钥')),
                 ],
                 selected: {kind},
@@ -467,11 +470,11 @@ class _VaultScreenState extends State<VaultScreen> {
                 const SizedBox(height: 8),
                 TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
               ] else if (kind == 'card') ...[
-                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '卡片名称 *（如 招商银行信用卡、身份证）', border: OutlineInputBorder())),
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '卡片名称 *（如 招商银行信用卡）', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
                 TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '持卡人姓名', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
-                TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '卡号 / 证件号', border: OutlineInputBorder())),
+                TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '卡号', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
                 Row(children: [
                   Expanded(
@@ -486,6 +489,26 @@ class _VaultScreenState extends State<VaultScreen> {
                 TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
                 TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注（如 发卡行、客服电话等）', border: OutlineInputBorder())),
+              ] else if (kind == 'idcard') ...[
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '证件名称 *（如 居民身份证、护照、驾照）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '姓名 / 持有人', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: passCtrl, decoration: const InputDecoration(labelText: '证件号码 *', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: idExpiryCtrl, decoration: const InputDecoration(labelText: '有效期至（如 2040-01-01 或 长期）', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(controller: idIssuerCtrl, decoration: const InputDecoration(labelText: '签发机关 / 地区（可选）', border: OutlineInputBorder())),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注说明', border: OutlineInputBorder())),
               ] else if (kind == 'apikey') ...[
                 TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '名称 *（如 OpenAI、AWS、GitHub Token）', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
@@ -537,13 +560,18 @@ class _VaultScreenState extends State<VaultScreen> {
           .toList();
 
       final customFields = (existing?.fields ?? const [])
-          .where((f) => f.label != '有效期' && f.label != 'CVV / 安全码')
+          .where((f) => f.label != '有效期' && f.label != 'CVV / 安全码' && f.label != '有效期至' && f.label != '签发机关')
           .toList();
       if (kind == 'card') {
         final exp = cardExpiryCtrl.text.trim();
         final cvv = cardCvvCtrl.text.trim();
         if (exp.isNotEmpty) customFields.add(VaultField(label: '有效期', value: exp, secret: false));
         if (cvv.isNotEmpty) customFields.add(VaultField(label: 'CVV / 安全码', value: cvv, secret: true));
+      } else if (kind == 'idcard') {
+        final exp = idExpiryCtrl.text.trim();
+        final iss = idIssuerCtrl.text.trim();
+        if (exp.isNotEmpty) customFields.add(VaultField(label: '有效期至', value: exp, secret: false));
+        if (iss.isNotEmpty) customFields.add(VaultField(label: '签发机关', value: iss, secret: false));
       }
 
       final itemTitle = titleCtrl.text.trim().isEmpty ? '未命名' : titleCtrl.text.trim();
@@ -598,6 +626,9 @@ class _VaultScreenState extends State<VaultScreen> {
     notesCtrl.dispose();
     cardExpiryCtrl.dispose();
     cardCvvCtrl.dispose();
+    idExpiryCtrl.dispose();
+    idIssuerCtrl.dispose();
+  }
   }
 
   Future<void> _showDetail(VaultItem it) async {
@@ -677,17 +708,34 @@ class _VaultScreenState extends State<VaultScreen> {
                   if (it.username.isNotEmpty)
                     _detailRow(
                       ctx,
-                      it.kind == 'card' ? '持卡人姓名' : (it.kind == 'apikey' ? 'Key ID / 标识' : '用户名 / 账号'),
+                      it.kind == 'card'
+                          ? '持卡人姓名'
+                          : (it.kind == 'idcard'
+                              ? '姓名 / 持有人'
+                              : (it.kind == 'apikey' ? 'Key ID / 标识' : '用户名 / 账号')),
                       it.username,
-                      onCopy: () => _copyField(it.username, it.kind == 'card' ? '持卡人' : '账号'),
+                      onCopy: () => _copyField(
+                          it.username,
+                          it.kind == 'card'
+                              ? '持卡人'
+                              : (it.kind == 'idcard' ? '姓名' : '账号')),
                     ),
                   if (it.password.isNotEmpty)
                     _detailRow(
                       ctx,
-                      it.kind == 'card' ? '卡号 / 证件号' : (it.kind == 'apikey' ? 'API 密钥 / Secret' : '密码'),
+                      it.kind == 'card'
+                          ? '卡号'
+                          : (it.kind == 'idcard'
+                              ? '证件号码'
+                              : (it.kind == 'apikey' ? 'API 密钥 / Secret' : '密码')),
                       showPw ? it.password : '••••••••••••',
                       trailing: TextButton(onPressed: () => setM(() => showPw = !showPw), child: Text(showPw ? '隐藏' : '显示')),
-                      onCopy: () => _copyField(it.password, it.kind == 'card' ? '卡号' : '密码', secret: true),
+                      onCopy: () => _copyField(
+                          it.password,
+                          it.kind == 'card'
+                              ? '卡号'
+                              : (it.kind == 'idcard' ? '证件号码' : '密码'),
+                          secret: true),
                     ),
                   if (otp != null)
                     _detailRow(
@@ -892,6 +940,7 @@ class _VaultScreenState extends State<VaultScreen> {
       ('2fa', '2FA'),
       ('note', '笔记'),
       ('card', '卡片'),
+      ('idcard', '证件'),
       ('apikey', '密钥'),
       ('fav', '★ 收藏'),
     ];
@@ -951,6 +1000,7 @@ class _VaultScreenState extends State<VaultScreen> {
                   final icon = switch (it.kind) {
                     'note' => Icons.notes_rounded,
                     'card' => Icons.credit_card_outlined,
+                    'idcard' => Icons.badge_outlined,
                     'apikey' => Icons.key_rounded,
                     _ => Icons.vpn_key_outlined,
                   };
@@ -978,6 +1028,7 @@ class _VaultScreenState extends State<VaultScreen> {
                             final subtitle = switch (it.kind) {
                               'note' => it.notes.replaceAll(RegExp(r'\s+'), ' ').trim(),
                               'card' => it.username.isNotEmpty ? it.username : (it.password.isNotEmpty ? '••••••••' : ''),
+                              'idcard' => it.username.isNotEmpty ? it.username : (it.password.isNotEmpty ? '••••••••' : ''),
                               'apikey' => it.username.isNotEmpty ? it.username : (it.url.isNotEmpty ? it.url : 'API 密钥'),
                               _ => it.username.isNotEmpty ? it.username : it.url,
                             };

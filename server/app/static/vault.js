@@ -650,8 +650,8 @@
   }
 
   // ==================== Vault UI（纸与墨主题，全部 textContent 安全渲染）====================
-  var KIND_LABEL = { login: '登录', note: '安全笔记', card: '卡片/证件', apikey: 'API 密钥' };
-  var KIND_BADGE = { login: '🔑', note: '📝', card: '💳', apikey: '⚡' };
+  var KIND_LABEL = { login: '登录', note: '安全笔记', card: '银行卡片', idcard: '证件资料', apikey: 'API 密钥' };
+  var KIND_BADGE = { login: '🔑', note: '📝', card: '💳', idcard: '🪪', apikey: '⚡' };
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -903,7 +903,7 @@
     var filters = el('div', 'vt-cats');
     var catDefs = [
       ['all', '全部'], ['login', '登录'], ['2fa', '2FA'], ['note', '笔记'],
-      ['card', '卡片'], ['apikey', '密钥'], ['fav', '★ 收藏']
+      ['card', '卡片'], ['idcard', '证件'], ['apikey', '密钥'], ['fav', '★ 收藏']
     ];
     catDefs.forEach(function (pair) {
       var b = el('button', 'pv-tab', pair[1]);
@@ -1057,7 +1057,10 @@
 
       if (it.kind === 'card') {
         addFieldRow('持卡人姓名', it.username, { mono: false });
-        addFieldRow('卡号 / 证件号', it.password, { secret: true, mono: true });
+        addFieldRow('卡号', it.password, { secret: true, mono: true });
+      } else if (it.kind === 'idcard') {
+        addFieldRow('姓名 / 持有人', it.username, { mono: false });
+        addFieldRow('证件号码', it.password, { secret: true, mono: true });
       } else if (it.kind === 'apikey') {
         addFieldRow('Key ID / 标识', it.username, { mono: true });
         addFieldRow('API 密钥 / Token', it.password, { secret: true, mono: true });
@@ -1069,7 +1072,7 @@
         addFieldRow('密码', it.password, { secret: true, mono: true });
       }
 
-      if (it.kind !== 'apikey' && it.kind !== 'card' && it.totp) {
+      if (it.kind !== 'apikey' && it.kind !== 'card' && it.kind !== 'idcard' && it.totp) {
         var otp = totpCode(it.totp);
         var row = el('div', 'vt-frow vt-otp-box');
         row.append(el('div', 'vt-flbl', '两步验证码（TOTP）'));
@@ -1135,7 +1138,7 @@
     var form = el('form', 'vt-form');
 
     var kindSel = el('select', 'vt-in');
-    [['login', '🔑 登录账号'], ['note', '📝 安全笔记'], ['card', '💳 卡片/证件'], ['apikey', '⚡ API 密钥']].forEach(function (p) {
+    [['login', '🔑 登录账号'], ['note', '📝 安全笔记'], ['card', '💳 银行卡片'], ['idcard', '🪪 证件资料'], ['apikey', '⚡ API 密钥']].forEach(function (p) {
       var o = document.createElement('option'); o.value = p[0]; o.textContent = p[1];
       if (cur.kind === p[0]) o.selected = true;
       kindSel.append(o);
@@ -1187,16 +1190,27 @@
         fNotes.rows = 8;
         fNotes.placeholder = '安全笔记内容 *';
       } else if (k === 'card') {
-        fTitle.placeholder = '卡片名称 *（如 招商银行信用卡、身份证）';
+        fTitle.placeholder = '卡片名称 *（如 招商银行信用卡）';
         fUser.hidden = false;
         fUser.placeholder = '持卡人姓名';
         pwWrap.hidden = false;
-        fPass.placeholder = '卡号 / 证件号';
+        fPass.placeholder = '卡号';
         fUrl.hidden = true;
         fTotp.hidden = true;
         fNotes.hidden = false;
         fNotes.rows = 3;
         fNotes.placeholder = '备注（如 发卡行、客服电话等）';
+      } else if (k === 'idcard') {
+        fTitle.placeholder = '证件名称 *（如 居民身份证、护照、驾照）';
+        fUser.hidden = false;
+        fUser.placeholder = '姓名 / 持有人';
+        pwWrap.hidden = false;
+        fPass.placeholder = '证件号码 *';
+        fUrl.hidden = true;
+        fTotp.hidden = true;
+        fNotes.hidden = false;
+        fNotes.rows = 3;
+        fNotes.placeholder = '备注说明（如 签发地、到期日等）';
       } else if (k === 'apikey') {
         fTitle.placeholder = '名称 *（如 OpenAI、AWS、GitHub Token）';
         fUser.hidden = false;

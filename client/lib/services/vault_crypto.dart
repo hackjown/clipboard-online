@@ -88,7 +88,7 @@ class VaultItem {
   });
 
   final String id;
-  String kind; // login | note | card | apikey
+  String kind; // login | note | card | idcard | apikey
   String title;
   String username;
   String password;

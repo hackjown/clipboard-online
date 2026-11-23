@@ -85,7 +85,13 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.18）
+## 本版新增（v0.1.19）
+
+- **端到端加密密码保险箱多端分类表单定制**：登录、安全笔记、银行卡片、证件资料（新增）、API 密钥各大类别提供独立定制表单与字段输入；详情查看与条目列表副标题自适应分类展示（Web / iOS / Android / macOS / 浏览器扩展全端同步）。
+- **iOS 移动端交互体验优化**：条目卡片删除按钮移至右上排不换行，操作栏保持单行显示；有效期选择器（含分享扩展设置）紧凑优化，保证「永不过期」始终同排显示。
+- **分享安全设置精简**：移除分享界面的「限 5 次」选项。
+
+## v0.1.18
 
 - **Chrome / Edge 密码保险箱扩展（Manifest V3）**：新增 `extension/`（Release 附 `clipboard-vault-extension.zip`），支持自动填充账号密码与 2FA（Shadow DOM 悬浮 🔑 菜单，兼容 React/Vue/Angular）、提交新登录自动提示一键保存、内置 2FA 实时倒计时与强密码生成器、支持 `clipboard://pair?...` 配对码登录，密钥仅驻留 `chrome.storage.session` 内存且 15 分钟自动锁定。
 - **修复 Android CI 构建（v0.1.17 无 Release）**：升级 Android Gradle Plugin `9.1.0` → `9.1.1` 与 Gradle `9.3.1` → `9.5.0` 以适配 Flutter 3.50.1；完整包含 v0.1.17 的全部功能（Office/CSV 预览、E2EE 密码库、分享提取码/阅后即焚、图片缩略图/图片同步、扫码配对、回收站/批量/ZIP、文件改名备注/代码高亮、空间统计/备份）。
