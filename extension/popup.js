@@ -274,7 +274,15 @@
     };
     app.replaceChildren();
     var card = el('div', 'card');
-    card.append(el('h2', null, isNew ? '新建账号条目' : '查看 / 编辑条目'));
+    card.append(el('h2', null, isNew ? '新建加密条目' : '查看 / 编辑条目'));
+
+    var kindSel = el('select', 'in');
+    [['login', '🔑 登录账号'], ['note', '📝 安全笔记'], ['card', '💳 卡片/证件'], ['apikey', '⚡ API 密钥']].forEach(function (p) {
+      var o = document.createElement('option'); o.value = p[0]; o.textContent = p[1];
+      if (cur.kind === p[0]) o.selected = true;
+      kindSel.append(o);
+    });
+
     var tIn = el('input', 'in'); tIn.placeholder = '名称'; tIn.value = cur.title || '';
     var uIn = el('input', 'in'); uIn.placeholder = '用户名 / 邮箱'; uIn.value = cur.username || '';
     var pIn = el('input', 'in mono'); pIn.placeholder = '密码'; pIn.value = cur.password || '';
@@ -288,16 +296,48 @@
     var nIn = el('textarea', 'ta'); nIn.placeholder = '备注'; nIn.value = cur.notes || '';
     var err = el('p', 'err'); err.hidden = true;
 
+    function updateFields() {
+      var k = kindSel.value;
+      if (k === 'note') {
+        tIn.placeholder = '笔记标题 *（如 服务器备忘）';
+        uIn.hidden = true; pRow.hidden = true; urlIn.hidden = true; otpIn.hidden = true;
+        nIn.hidden = false; nIn.rows = 8; nIn.placeholder = '安全笔记内容 *';
+      } else if (k === 'card') {
+        tIn.placeholder = '卡片名称 *（如 招行信用卡、身份证）';
+        uIn.hidden = false; uIn.placeholder = '持卡人姓名';
+        pRow.hidden = false; pIn.placeholder = '卡号 / 证件号';
+        urlIn.hidden = true; otpIn.hidden = true;
+        nIn.hidden = false; nIn.rows = 3; nIn.placeholder = '备注（如 发卡行、客服电话等）';
+      } else if (k === 'apikey') {
+        tIn.placeholder = '名称 *（如 OpenAI、AWS Token）';
+        uIn.hidden = false; uIn.placeholder = 'Key ID / Access Key（可选）';
+        pRow.hidden = false; pIn.placeholder = 'API 密钥 / Secret Token *';
+        urlIn.hidden = false; urlIn.placeholder = '接口地址 / 服务端点';
+        otpIn.hidden = true;
+        nIn.hidden = false; nIn.rows = 3; nIn.placeholder = '备注说明';
+      } else {
+        tIn.placeholder = '名称（如 GitHub、Google）';
+        uIn.hidden = false; uIn.placeholder = '用户名 / 邮箱';
+        pRow.hidden = false; pIn.placeholder = '密码';
+        urlIn.hidden = false; urlIn.placeholder = '网址';
+        otpIn.hidden = false; otpIn.placeholder = 'TOTP 密钥或 otpauth://（可选）';
+        nIn.hidden = false; nIn.rows = 3; nIn.placeholder = '备注';
+      }
+    }
+    kindSel.onchange = updateFields;
+    updateFields();
+
     var back = el('button', 'btn', '返回'); back.type = 'button'; back.onclick = function () { renderUnlocked(); };
     var fillB = el('button', 'btn btn--ink', '填充'); fillB.type = 'button';
     fillB.onclick = function () { autofillItem({ username: uIn.value, password: pIn.value, totp: otpIn.value }); };
     var saveB = el('button', 'btn btn--acc', '加密保存'); saveB.type = 'button';
     saveB.onclick = async function () {
+      cur.kind = kindSel.value;
       cur.title = tIn.value.trim() || VaultExtCrypto.extractHost(urlIn.value) || '未命名';
-      cur.username = uIn.value.trim();
-      cur.password = pIn.value;
-      cur.url = urlIn.value.trim();
-      cur.totp = otpIn.value.trim();
+      cur.username = cur.kind === 'note' ? '' : uIn.value.trim();
+      cur.password = cur.kind === 'note' ? '' : pIn.value;
+      cur.url = (cur.kind === 'login' || cur.kind === 'apikey') ? urlIn.value.trim() : '';
+      cur.totp = (cur.kind === 'login') ? otpIn.value.trim() : '';
       cur.notes = nIn.value;
       saveB.disabled = true; err.hidden = true;
       var r = await send({ type: 'SAVE_ITEM', item: cur });
@@ -307,7 +347,7 @@
       refresh();
     };
     var row = el('div', 'row'); row.append(back, fillB, saveB);
-    card.append(tIn, uIn, pRow, urlIn, otpIn, nIn, err, row);
+    card.append(kindSel, tIn, uIn, pRow, urlIn, otpIn, nIn, err, row);
     if (!isNew) {
       var del = el('button', 'btn btn--sm btn--ghost', '删除此条目'); del.type = 'button'; del.style.color = 'var(--danger)';
       del.onclick = async function () {
