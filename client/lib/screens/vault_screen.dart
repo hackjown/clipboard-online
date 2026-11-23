@@ -629,7 +629,6 @@ class _VaultScreenState extends State<VaultScreen> {
     idExpiryCtrl.dispose();
     idIssuerCtrl.dispose();
   }
-  }
 
   Future<void> _showDetail(VaultItem it) async {
     _resetAutoLock();
