@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api.dart';
@@ -13,6 +14,7 @@ import '../services/clip_sync.dart';
 import '../services/clipboard_watch.dart';
 import '../services/vault_biometric.dart';
 import '../services/vault_crypto.dart';
+import '../services/vision_ocr.dart';
 import '../theme/ink_theme.dart';
 import '../widgets/ink.dart';
 
@@ -60,6 +62,9 @@ class _VaultScreenState extends State<VaultScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ScaffoldMessenger.of(context).clearSnackBars();
+    });
     _fetchEnvelope();
     _initBiometrics();
   }
@@ -90,6 +95,7 @@ class _VaultScreenState extends State<VaultScreen> {
     _pw1Ctrl.dispose();
     _pw2Ctrl.dispose();
     _searchCtrl.dispose();
+    ScaffoldMessenger.of(context).clearSnackBars();
     super.dispose();
   }
 
@@ -536,6 +542,154 @@ class _VaultScreenState extends State<VaultScreen> {
     );
   }
 
+  Future<XFile?> _pickImageSource(BuildContext ctx) async {
+    final picker = ImagePicker();
+    final source = await showModalBottomSheet<ImageSource>(
+      context: ctx,
+      builder: (c) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('拍照'),
+              onTap: () => Navigator.pop(c, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('从相册选择'),
+              onTap: () => Navigator.pop(c, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return null;
+    try {
+      return await picker.pickImage(source: source);
+    } catch (e) {
+      _toast('获取图片失败：$e');
+      return null;
+    }
+  }
+
+  Future<void> _scanCard(
+    BuildContext ctx,
+    TextEditingController titleCtrl,
+    TextEditingController userCtrl,
+    TextEditingController passCtrl,
+    TextEditingController cardExpiryCtrl,
+    TextEditingController cardCvvCtrl,
+    void Function(void Function()) setM,
+  ) async {
+    final xfile = await _pickImageSource(ctx);
+    if (xfile == null) return;
+    _toast('正在智能识别卡片…');
+    final res = await VisionOcr.recognizeText(xfile.path);
+    if (res == null) {
+      _toast('当前系统暂不支持本地视觉文字识别');
+      return;
+    }
+    final rawLines = (res['lines'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    if (rawLines.isEmpty) {
+      _toast('未能识别到卡片上的文字');
+      return;
+    }
+    final parsed = VisionOcr.parseCard(rawLines);
+    setM(() {
+      if (parsed.title.isNotEmpty && (titleCtrl.text.isEmpty || titleCtrl.text == '卡片')) {
+        titleCtrl.text = parsed.title;
+      }
+      if (parsed.cardholder.isNotEmpty && userCtrl.text.isEmpty) {
+        userCtrl.text = parsed.cardholder;
+      }
+      if (parsed.cardNumber.isNotEmpty) {
+        passCtrl.text = parsed.cardNumber;
+      }
+      if (parsed.expiry.isNotEmpty) {
+        cardExpiryCtrl.text = parsed.expiry;
+      }
+      if (parsed.cvv.isNotEmpty) {
+        cardCvvCtrl.text = parsed.cvv;
+      }
+    });
+    _toast('卡片识别完成，请核对信息');
+  }
+
+  Future<void> _scanIdCard(
+    BuildContext ctx,
+    TextEditingController titleCtrl,
+    TextEditingController userCtrl,
+    TextEditingController passCtrl,
+    TextEditingController idExpiryCtrl,
+    TextEditingController idIssuerCtrl,
+    TextEditingController notesCtrl,
+    void Function(void Function()) setM,
+  ) async {
+    final xfile = await _pickImageSource(ctx);
+    if (xfile == null) return;
+    _toast('正在智能识别证件…');
+    final res = await VisionOcr.recognizeText(xfile.path);
+    if (res == null) {
+      _toast('当前系统暂不支持本地视觉文字识别');
+      return;
+    }
+    final rawLines = (res['lines'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    if (rawLines.isEmpty) {
+      _toast('未能识别到证件上的文字');
+      return;
+    }
+    final parsed = VisionOcr.parseIdCard(rawLines);
+    setM(() {
+      if (parsed.title.isNotEmpty && (titleCtrl.text.isEmpty || titleCtrl.text == '证件')) {
+        titleCtrl.text = parsed.title;
+      }
+      if (parsed.name.isNotEmpty && userCtrl.text.isEmpty) {
+        userCtrl.text = parsed.name;
+      }
+      if (parsed.idNumber.isNotEmpty) {
+        passCtrl.text = parsed.idNumber;
+      }
+      if (parsed.expiry.isNotEmpty) {
+        idExpiryCtrl.text = parsed.expiry;
+      }
+      if (parsed.issuer.isNotEmpty) {
+        idIssuerCtrl.text = parsed.issuer;
+      }
+      if (parsed.address.isNotEmpty) {
+        notesCtrl.text = notesCtrl.text.isEmpty ? '住址：${parsed.address}' : '${notesCtrl.text}\n住址：${parsed.address}';
+      }
+    });
+    _toast('证件识别完成，请核对信息');
+  }
+
+  Future<void> _scanTextForNote(
+    BuildContext ctx,
+    TextEditingController notesCtrl,
+    void Function(void Function()) setM,
+  ) async {
+    final xfile = await _pickImageSource(ctx);
+    if (xfile == null) return;
+    _toast('正在扫描图片文字…');
+    final res = await VisionOcr.recognizeText(xfile.path);
+    if (res == null) {
+      _toast('当前系统暂不支持本地视觉文字识别');
+      return;
+    }
+    final text = res['text'] as String? ?? '';
+    if (text.trim().isEmpty) {
+      _toast('未能在图片中识别到文字');
+      return;
+    }
+    setM(() {
+      if (notesCtrl.text.trim().isEmpty) {
+        notesCtrl.text = text;
+      } else {
+        notesCtrl.text = '${notesCtrl.text}\n\n$text';
+      }
+    });
+    _toast('已扫描提取文字并填入笔记');
+  }
+
   Future<void> _openEditor([VaultItem? existing]) async {
     _resetAutoLock();
     final isNew = existing == null;
@@ -604,13 +758,35 @@ class _VaultScreenState extends State<VaultScreen> {
                 const SizedBox(height: 8),
                 TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注 / 安全笔记', border: OutlineInputBorder())),
               ] else if (kind == 'note') ...[
-                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '笔记标题 *（如 服务器备忘）', border: OutlineInputBorder())),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '笔记标题 *（如 服务器备忘）', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  InkButton(
+                    label: '拍照扫描文字',
+                    icon: Icons.document_scanner_outlined,
+                    dense: true,
+                    onPressed: () => _scanTextForNote(ctx, notesCtrl, setM),
+                  ),
+                ]),
                 const SizedBox(height: 8),
                 TextField(controller: notesCtrl, minLines: 6, maxLines: 12, decoration: const InputDecoration(labelText: '安全笔记内容 *', alignLabelWithHint: true, border: OutlineInputBorder())),
                 const SizedBox(height: 8),
                 TextField(controller: tagsCtrl, decoration: const InputDecoration(labelText: '标签（逗号分隔）', border: OutlineInputBorder())),
               ] else if (kind == 'card') ...[
-                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '卡片名称 *（如 招商银行信用卡）', border: OutlineInputBorder())),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '卡片名称 *（如 招商银行信用卡）', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  InkButton(
+                    label: '拍照识别',
+                    icon: Icons.credit_card_outlined,
+                    dense: true,
+                    onPressed: () => _scanCard(ctx, titleCtrl, userCtrl, passCtrl, cardExpiryCtrl, cardCvvCtrl, setM),
+                  ),
+                ]),
                 const SizedBox(height: 8),
                 TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '持卡人姓名', border: OutlineInputBorder())),
                 const SizedBox(height: 8),
@@ -630,7 +806,18 @@ class _VaultScreenState extends State<VaultScreen> {
                 const SizedBox(height: 8),
                 TextField(controller: notesCtrl, maxLines: 3, decoration: const InputDecoration(labelText: '备注（如 发卡行、客服电话等）', border: OutlineInputBorder())),
               ] else if (kind == 'idcard') ...[
-                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '证件名称 *（如 居民身份证、护照、驾照）', border: OutlineInputBorder())),
+                Row(children: [
+                  Expanded(
+                    child: TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '证件名称 *（如 居民身份证、护照、驾照）', border: OutlineInputBorder())),
+                  ),
+                  const SizedBox(width: 8),
+                  InkButton(
+                    label: '拍照识别',
+                    icon: Icons.badge_outlined,
+                    dense: true,
+                    onPressed: () => _scanIdCard(ctx, titleCtrl, userCtrl, passCtrl, idExpiryCtrl, idIssuerCtrl, notesCtrl, setM),
+                  ),
+                ]),
                 const SizedBox(height: 8),
                 TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '姓名 / 持有人', border: OutlineInputBorder())),
                 const SizedBox(height: 8),

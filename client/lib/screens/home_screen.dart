@@ -498,6 +498,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openVault() {
+    ScaffoldMessenger.of(context).clearSnackBars();
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => VaultScreen(api: widget.api, clipWatch: _clip),
     ));
@@ -843,9 +844,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     await widget.api.delete(it.uuid);
                                     _refresh();
                                     if (mounted) {
+                                      ScaffoldMessenger.of(context).clearSnackBars();
                                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                                         content: const Text('已移入回收站'),
-                                        duration: const Duration(seconds: 6),
+                                        duration: const Duration(seconds: 2),
+                                        dismissDirection: DismissDirection.horizontal,
                                         action: SnackBarAction(
                                           label: '撤销',
                                           onPressed: () async {

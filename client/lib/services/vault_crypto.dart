@@ -429,7 +429,7 @@ class VaultCrypto {
     final iUrl = col(['url', 'website', 'login_uri', '网址', '网站']);
     final iUser = col(['username', 'login_username', 'user', '用户名', '账号']);
     final iPass = col(['password', 'login_password', 'pass', '密码']);
-    final iOtp = col(['otpauth', 'one-time password', 'totp', 'login_totp', 'otp', '2fa', '一次性密码']);
+    final iOtp = col(['otpauth', 'one-time password', 'totp', 'login_totp', 'otp', '2fa', '一次性密码', '验证码']);
     final iNotes = col(['notes', 'note', '备注']);
     final iTags = col(['tags', 'tag', '标签']);
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
