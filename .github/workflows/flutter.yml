@@ -183,10 +183,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Pack Chrome/Edge extension
+        run: zip -rq dist/clipboard-vault-extension.zip extension
       - run: ls -la dist
       - uses: softprops/action-gh-release@v2
         with:
@@ -194,12 +197,14 @@ jobs:
           fail_on_unmatched_files: true
           body: |
             ## 下载说明
+            - **clipboard-vault-extension.zip** — Chrome / Edge 密码保险箱扩展（Manifest V3）：解压后在 `edge://extensions` 或 `chrome://extensions` 开启开发者模式「加载解压缩的扩展」
             - **clipboard-android.apk** — Android 安装包（debug 签名，可直接侧载）
             - **clipboard-macos.zip** — macOS `.app`，**未签名/未公证**：右键「打开」，或 `xattr -cr clipboard_client.app`
             - **clipboard-ios-trollstore.ipa** — **TrollStore 专用**：已用 ldid 伪签并写入 App Group entitlement（主 App 与分享扩展均有），分享扩展可用
             - **clipboard-ios-unsigned.ipa** — iOS **未签名** IPA，**不能直接安装**；供 AltStore / Sideloadly 或自有证书重签（免费 Apple ID 无 App Group，分享扩展会在面板里登录后直传）。IPA 内已嵌入 Share Extension（PlugIns/ShareExtension.appex）
             - 服务端镜像：`ghcr.io/hackjown/clipboard-online/clipboard-online`
           files: |
+            dist/clipboard-vault-extension.zip
             dist/clipboard-macos.zip
             dist/clipboard-ios-unsigned.ipa
             dist/clipboard-ios-trollstore.ipa

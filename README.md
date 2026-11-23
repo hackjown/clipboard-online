@@ -85,7 +85,12 @@ git push -u origin main
 请勿提交 `.venv`、`data/*.json`、真实密钥。
 
 
-## 本版新增（v0.1.17）
+## 本版新增（v0.1.18）
+
+- **Chrome / Edge 密码保险箱扩展（Manifest V3）**：新增 `extension/`（Release 附 `clipboard-vault-extension.zip`），支持自动填充账号密码与 2FA（Shadow DOM 悬浮 🔑 菜单，兼容 React/Vue/Angular）、提交新登录自动提示一键保存、内置 2FA 实时倒计时与强密码生成器、支持 `clipboard://pair?...` 配对码登录，密钥仅驻留 `chrome.storage.session` 内存且 15 分钟自动锁定。
+- **修复 Android CI 构建（v0.1.17 无 Release）**：升级 Android Gradle Plugin `9.1.0` → `9.1.1` 与 Gradle `9.3.1` → `9.5.0` 以适配 Flutter 3.50.1；完整包含 v0.1.17 的全部功能（Office/CSV 预览、E2EE 密码库、分享提取码/阅后即焚、图片缩略图/图片同步、扫码配对、回收站/批量/ZIP、文件改名备注/代码高亮、空间统计/备份）。
+
+## v0.1.17（服务端镜像已发布，Android AGP 版本导致无 Release，已由 v0.1.18 完整发布）
 
 - **Office & 表格文档在线预览（Web + 分享页 + Flutter 三端）**：纯 Python 轻量解析（无需 LibreOffice，镜像增重 < 3 MB），支持 `.docx`（标题/段落/富文本样式/列表/表格/嵌入图片）、`.xlsx / .xlsm / .xls / .csv / .tsv`（多工作表切换 + 粘性行列头）、`.pptx`（按放映顺序逐页卡片 + 表格/图片 + 演讲者备注）；旧版 `.doc / .ppt` 与加密文档给出明确提示。
 - **端到端加密密码保险箱（类 1Password，Web + Flutter 三端互通）**：客户端本地 `PBKDF2-HMAC-SHA256 + AES-256-GCM` 零知识加密，服务端仅存密文信封（`/api/vault`，支持乐观锁防多端覆盖与账号密码确认重置）。支持账号密码 / 安全笔记 / 卡片 / API 密钥、**内置 TOTP 2FA 动态验证码**（30 秒倒计时）、随机强密码生成器、**导入 1Password（`.1pux` / `.csv`）/ Bitwarden / Chrome**、加密备份导出、30 秒自动清空剪贴板且绝不触发多设备明文同步。

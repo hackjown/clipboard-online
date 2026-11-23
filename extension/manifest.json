@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Clipboard Vault · 密码保险箱",
+  "short_name": "Clipboard Vault",
+  "version": "0.1.18",
+  "description": "Clipboard Online 端到端加密密码保险箱扩展（Chrome / Edge）：自动填充账号密码、内置 2FA 动态验证码、强密码生成与登录保存。",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Clipboard Vault 密码保险箱",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "alarms",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+P",
+        "mac": "Command+Shift+P"
+      },
+      "description": "打开 Clipboard Vault 密码保险箱"
+    }
+  }
+}
