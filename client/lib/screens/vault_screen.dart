@@ -714,24 +714,37 @@ class _VaultScreenState extends State<VaultScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setM) => Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Text(isNew ? '新建加密条目' : '编辑条目',
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 12),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'login', label: Text('登录')),
-                  ButtonSegment(value: 'note', label: Text('笔记')),
-                  ButtonSegment(value: 'card', label: Text('卡片')),
-                  ButtonSegment(value: 'idcard', label: Text('证件')),
-                  ButtonSegment(value: 'apikey', label: Text('密钥')),
-                ],
-                selected: {kind},
-                onSelectionChanged: (s) => setM(() => kind = s.first),
-              ),
+        builder: (ctx, setM) {
+          final t = ctx.ink;
+          return Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Text(isNew ? '新建加密条目' : '编辑条目',
+                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 12),
+                SegmentedButton<String>(
+                  showSelectedIcon: false,
+                  style: SegmentedButton.styleFrom(
+                    selectedBackgroundColor: t.accent,
+                    selectedForegroundColor: InkTokens.onColor,
+                    backgroundColor: t.paper,
+                    foregroundColor: t.ink,
+                    textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    visualDensity: VisualDensity.compact,
+                    side: BorderSide(color: t.line, width: 1.5),
+                  ),
+                  segments: const [
+                    ButtonSegment(value: 'login', label: Text('登录', maxLines: 1, softWrap: false)),
+                    ButtonSegment(value: 'note', label: Text('笔记', maxLines: 1, softWrap: false)),
+                    ButtonSegment(value: 'card', label: Text('卡片', maxLines: 1, softWrap: false)),
+                    ButtonSegment(value: 'idcard', label: Text('证件', maxLines: 1, softWrap: false)),
+                    ButtonSegment(value: 'apikey', label: Text('密钥', maxLines: 1, softWrap: false)),
+                  ],
+                  selected: {kind},
+                  onSelectionChanged: (s) => setM(() => kind = s.first),
+                ),
               const SizedBox(height: 10),
               if (kind == 'login') ...[
                 TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '名称 *（如 GitHub、Google）', border: OutlineInputBorder())),
@@ -873,9 +886,10 @@ class _VaultScreenState extends State<VaultScreen> {
               ]),
             ]),
           ),
-        ),
-      ),
-    );
+        );
+      },
+    ),
+  );
 
     if (saved == true && _data != null) {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;

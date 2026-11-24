@@ -254,9 +254,9 @@ ThemeData buildInkTheme(Brightness b) {
       style: ButtonStyle(
         side: WidgetStatePropertyAll(BorderSide(color: t.line, width: 2)),
         backgroundColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.selected) ? t.ink : t.paper),
+            (s) => s.contains(WidgetState.selected) ? t.accent : t.paper),
         foregroundColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.selected) ? t.paper : t.ink),
+            (s) => s.contains(WidgetState.selected) ? InkTokens.onColor : t.ink),
       ),
     ),
   );

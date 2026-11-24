@@ -71,6 +71,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   bool _loading = true;
   String? _err;
   bool _watchOn = false;
+  String? _trashUndoUuid;
+  Timer? _trashNoticeTimer;
+
+  void _showTrashNotice(String uuid) {
+    _trashNoticeTimer?.cancel();
+    setState(() {
+      _trashUndoUuid = uuid;
+    });
+    _trashNoticeTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() {
+          _trashUndoUuid = null;
+        });
+      }
+    });
+  }
+
+  void _dismissTrashNotice() {
+    _trashNoticeTimer?.cancel();
+    if (_trashUndoUuid != null) {
+      setState(() {
+        _trashUndoUuid = null;
+      });
+    }
+  }
 
   String get _tabKey => 'last_tab_${widget.user.username}';
 
@@ -98,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _tabs = TabController(length: 2, vsync: this, initialIndex: 1);
     _restored = _restoreTab();
     _tabs.addListener(() {
+      _dismissTrashNotice();
       if (!_tabs.indexIsChanging) {
         _saveTab();
         _refresh();
@@ -297,6 +323,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _trashNoticeTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
     _ws.stop();
@@ -325,10 +352,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _items = r.items;
         _counts = r.counts;
         _loading = false;
+        _err = null;
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _err = e.toString(); _loading = false; });
+      if (silent && _items.isNotEmpty) {
+        // 静默后台刷新遇到偶发网络/DNS抖动时不打扰已显示列表的用户
+        setState(() { _loading = false; });
+        return;
+      }
+      setState(() {
+        _err = e.toString();
+        _loading = false;
+      });
     }
   }
 
@@ -498,6 +534,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openVault() {
+    _dismissTrashNotice();
     ScaffoldMessenger.of(context).clearSnackBars();
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => VaultScreen(api: widget.api, clipWatch: _clip),
@@ -598,6 +635,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openQuickTransfer() {
+    _dismissTrashNotice();
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => QuickTransferScreen(
         api: widget.api,
@@ -738,7 +776,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           if (a == 'paste') _clip.importOnce();
         },
       ),
-      body: PaperBackground(child: Column(
+      body: PaperBackground(child: Stack(
+        children: [
+          Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -780,9 +820,40 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
           if (_err != null)
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(_err!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(InkTokens.radiusSm),
+                border: Border.all(color: Theme.of(context).colorScheme.error.withOpacity(0.4), width: 1.5),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.wifi_off_rounded, size: 18, color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _err!.contains('Failed host lookup') || _err!.contains('SocketException')
+                          ? '网络连接异常，正在自动重试…'
+                          : _err!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => setState(() => _err = null),
+                  ),
+                ],
+              ),
             ),
           Expanded(
             child: RefreshIndicator(
@@ -844,19 +915,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     await widget.api.delete(it.uuid);
                                     _refresh();
                                     if (mounted) {
-                                      ScaffoldMessenger.of(context).clearSnackBars();
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                        content: const Text('已移入回收站'),
-                                        duration: const Duration(seconds: 2),
-                                        dismissDirection: DismissDirection.horizontal,
-                                        action: SnackBarAction(
-                                          label: '撤销',
-                                          onPressed: () async {
-                                            await widget.api.restoreTrash(it.uuid);
-                                            _refresh();
-                                          },
-                                        ),
-                                      ));
+                                      _showTrashNotice(it.uuid);
                                     }
                                   }
                                 }
@@ -909,7 +968,69 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
         ],
-      )),
-    );
+      ),
+      if (_trashUndoUuid != null)
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: SafeArea(
+            child: Material(
+              elevation: 6,
+              shadowColor: Colors.black38,
+              borderRadius: BorderRadius.circular(InkTokens.radius),
+              color: context.ink.dark ? const Color(0xFF2C2C2E) : const Color(0xFF1E1E1E),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(InkTokens.radius),
+                  border: Border.all(color: context.ink.line, width: 1.5),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.delete_outline, size: 20, color: Colors.white70),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        '已移入回收站',
+                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        foregroundColor: context.ink.accent,
+                      ),
+                      onPressed: () async {
+                        final target = _trashUndoUuid;
+                        _dismissTrashNotice();
+                        if (target != null) {
+                          try {
+                            await widget.api.restoreTrash(target);
+                            _refresh(silent: true);
+                          } catch (_) {}
+                        }
+                      },
+                      child: const Text('撤销', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: _dismissTrashNotice,
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 16, color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+    ],
+  )),
+);
   }
 }
